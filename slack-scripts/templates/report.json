@@ -1,0 +1,28 @@
+[
+  {
+    "type": "header",
+    "text": { "type": "plain_text", "text": "Report title (≤150 chars)", "emoji": true }
+  },
+  {
+    "type": "context",
+    "elements": [
+      { "type": "mrkdwn", "text": "_Window: YYYY-MM-DD → YYYY-MM-DD • Source: <system>_" }
+    ]
+  },
+  { "type": "divider" },
+  {
+    "type": "markdown",
+    "text": "## TL;DR\n\nOne-paragraph summary of the most important finding."
+  },
+  {
+    "type": "markdown",
+    "text": "## Key findings\n\n- **Finding 1** — supporting detail.\n- **Finding 2** — supporting detail.\n- **Finding 3** — supporting detail."
+  },
+  { "type": "divider" },
+  {
+    "type": "context",
+    "elements": [
+      { "type": "mrkdwn", "text": "cc <@AUTHORIZED_USER_ID>" }
+    ]
+  }
+]

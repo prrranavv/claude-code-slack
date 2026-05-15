@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude-slack-bot-gc</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>%%INSTALL_DIR%%/gc.sh</string>
+    </array>
+
+    <!-- Nightly at 04:07 local -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>7</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>%%INSTALL_DIR%%/gc-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>%%INSTALL_DIR%%/gc-stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>%%HOME%%</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>CLAUDE_SLACK_INSTALL_DIR</key>
+        <string>%%INSTALL_DIR%%</string>
+    </dict>
+</dict>
+</plist>

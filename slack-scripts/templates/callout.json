@@ -1,0 +1,12 @@
+[
+  {
+    "type": "markdown",
+    "text": "> 🚨 **HIGH — Short title of the issue**\n>\n> One-paragraph explanation of what's wrong, who it affects, and the recommended next step.\n\nSeverity: 🚨 error/blocker • ⚠️ warning • ℹ️ info • ✅ success"
+  },
+  {
+    "type": "context",
+    "elements": [
+      { "type": "mrkdwn", "text": "cc <@AUTHORIZED_USER_ID>" }
+    ]
+  }
+]

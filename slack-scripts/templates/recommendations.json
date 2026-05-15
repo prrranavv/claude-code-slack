@@ -1,0 +1,32 @@
+[
+  {
+    "type": "markdown",
+    "text": "## Recommendations\n\nOne-sentence framing of what these recommendations aim at."
+  },
+  {
+    "type": "table",
+    "rows": [
+      [
+        { "type": "raw_text", "text": "Priority" },
+        { "type": "raw_text", "text": "Action" },
+        { "type": "raw_text", "text": "Impact" }
+      ],
+      [
+        { "type": "raw_text", "text": "P0" },
+        { "type": "raw_text", "text": "Describe the top action" },
+        { "type": "raw_text", "text": "Expected outcome" }
+      ],
+      [
+        { "type": "raw_text", "text": "P1" },
+        { "type": "raw_text", "text": "Second action" },
+        { "type": "raw_text", "text": "Expected outcome" }
+      ]
+    ]
+  },
+  {
+    "type": "context",
+    "elements": [
+      { "type": "mrkdwn", "text": "cc <@AUTHORIZED_USER_ID>" }
+    ]
+  }
+]

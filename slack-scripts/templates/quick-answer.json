@@ -1,0 +1,12 @@
+[
+  {
+    "type": "markdown",
+    "text": "**Short title or answer**\n\nOne-paragraph response. Supports **bold**, *italic*, `code`, [links](https://example.com), and bullets:\n\n- First point\n- Second point\n- Third point"
+  },
+  {
+    "type": "context",
+    "elements": [
+      { "type": "mrkdwn", "text": "cc <@AUTHORIZED_USER_ID>" }
+    ]
+  }
+]
