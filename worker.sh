@@ -277,7 +277,7 @@ $CONTEXT_BLOCK
 
 Before acting:
 1. **New messages since your last turn** are in the "Thread context" section above. Image attachments are pre-downloaded to \`/tmp/slackimg_<F...>.<ext>\` — use \`Read\` on those paths. Do NOT call \`\$SLACK replies\`, \`\$SLACK history\`, or \`\$SLACK files\` at turn start unless the section is empty (pre-fetch failed — fallback to calling \`\$SLACK replies --ts $THREAD_TS\`).
-2. Authorization re-check: this turn was sent by \`$USER\`. If that is NOT \`$AUTHORIZED_USER_ID\`, refuse any write/destructive operations.
+2. Authorization re-check: this turn was sent by \`$USER\`. If that is NOT \`$AUTHORIZED_USER_ID\`$([ -n "${EXTRA_WRITE_USER_IDS:-}" ] && echo " or one of \`${EXTRA_WRITE_USER_IDS}\`"), refuse any write/destructive operations.
 3. Your prior context and tool results are still in memory — use them. Don't re-derive what you already know.
 4. Act ONLY on the new mention at $TS.
 
@@ -288,10 +288,19 @@ else
   if [ "$RESUME_MODE" = "fresh" ] && { [ "$RESUME_SESSIONS" = "dm" ] || [ "$RESUME_SESSIONS" = "1" ]; }; then
     log "worker: FRESH (reason=$RESUME_REASON, dm=$IS_DM)"
   fi
+  # Build extra authorized users block for the prompt
+  EXTRA_WRITE_USER_IDS="${EXTRA_WRITE_USER_IDS:-}"
+  if [ -n "$EXTRA_WRITE_USER_IDS" ]; then
+    EXTRA_AUTH_BLOCK="- Additional write-authorized users: \`${EXTRA_WRITE_USER_IDS}\`"
+  else
+    EXTRA_AUTH_BLOCK=""
+  fi
+
   JOB_PROMPT=$(CH="$CH" TS="$TS" SLACK_USER="$USER" STATUS_FILE="$STATUS_FILE" \
                PROMPT_FILE="$PROMPT_FILE" CONTEXT_BLOCK="$CONTEXT_BLOCK" \
                AUTHORIZED_USER_ID="$AUTHORIZED_USER_ID" BOT_USER_ID="$BOT_USER_ID" \
-               BOT_NAME="$BOT_NAME" \
+               BOT_NAME="$BOT_NAME" EXTRA_AUTH_BLOCK="$EXTRA_AUTH_BLOCK" \
+               EXTRA_WRITE_USER_IDS="$EXTRA_WRITE_USER_IDS" \
                python3 -c '
 import os, sys
 with open(os.environ["PROMPT_FILE"]) as f:
@@ -303,6 +312,8 @@ p = p.replace("{{USER}}", os.environ.get("SLACK_USER", ""))
 p = p.replace("{{STATUS_FILE}}", os.environ.get("STATUS_FILE", ""))
 p = p.replace("{{THREAD_CONTEXT}}", os.environ.get("CONTEXT_BLOCK", ""))
 p = p.replace("{{AUTHORIZED_USER_ID}}", os.environ.get("AUTHORIZED_USER_ID", ""))
+p = p.replace("{{EXTRA_AUTH_BLOCK}}", os.environ.get("EXTRA_AUTH_BLOCK", ""))
+p = p.replace("{{EXTRA_WRITE_USER_IDS}}", os.environ.get("EXTRA_WRITE_USER_IDS", ""))
 p = p.replace("{{BOT_USER_ID}}", os.environ.get("BOT_USER_ID", ""))
 p = p.replace("{{BOT_NAME}}", os.environ.get("BOT_NAME", "ClaudeBot"))
 sys.stdout.write(p)
