@@ -271,7 +271,7 @@ Only `AUTHORIZED_USER_ID` can trigger write/destructive operations. Everyone els
 
 Enforcement is in `job-prompt.md`'s Authorization section. The authorized user's identity comes from Slack's event payload — it cannot be spoofed from message content.
 
-**What this doesn't protect against:** Pranav's Slack account being compromised, or anyone with shell access to the Mac.
+**What this doesn't protect against:** Your Slack account being compromised, or anyone with shell access to the Mac.
 
 ---
 

@@ -22,11 +22,5 @@
         { "type": "raw_text", "text": "Expected outcome" }
       ]
     ]
-  },
-  {
-    "type": "context",
-    "elements": [
-      { "type": "mrkdwn", "text": "cc <@AUTHORIZED_USER_ID>" }
-    ]
   }
 ]

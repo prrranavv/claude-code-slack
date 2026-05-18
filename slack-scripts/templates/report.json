@@ -18,11 +18,5 @@
     "type": "markdown",
     "text": "## Key findings\n\n- **Finding 1** — supporting detail.\n- **Finding 2** — supporting detail.\n- **Finding 3** — supporting detail."
   },
-  { "type": "divider" },
-  {
-    "type": "context",
-    "elements": [
-      { "type": "mrkdwn", "text": "cc <@AUTHORIZED_USER_ID>" }
-    ]
-  }
+  { "type": "divider" }
 ]

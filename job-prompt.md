@@ -96,9 +96,16 @@ Use Block Kit for richer replies. Templates are available at `$SLACK_TEMPLATES/`
 Usage:
 ```bash
 cp $SLACK_TEMPLATES/quick-answer.json /tmp/msg.json
-# edit /tmp/msg.json — fill in the content
+# edit /tmp/msg.json — fill in the content, then append the cc context block:
+# { "type": "context", "elements": [{ "type": "mrkdwn", "text": "cc <@{{AUTHORIZED_USER_ID}}>" }] }
 $SLACK post --channel {{CHANNEL}} --thread-ts {{TS}} --blocks-file /tmp/msg.json --text "fallback text"
 ```
+
+**Always append a cc context block as the last element** in your blocks JSON before posting:
+```json
+{ "type": "context", "elements": [{ "type": "mrkdwn", "text": "cc <@{{AUTHORIZED_USER_ID}}>" }] }
+```
+Templates do not include this block — you add it fresh every time with the correct ID.
 
 For plain-text replies just use `--text`. For longer outputs, post a summary and attach a markdown file.
 
