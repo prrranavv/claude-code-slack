@@ -156,8 +156,6 @@ worker.sh
               └─ writes status file → watcher fires ✅ / ❌ / 💬
 ```
 
-[**View full interactive diagram →**](https://excalidraw.com/#json=XuUmy6iHC-5D8YVLgldZY,wN-FGokaweS2KEjbXarJbQ)
-
 **Four things that make this reliable:**
 
 - **Socket Mode push** — Slack pushes events over WebSocket. No polling, no gaps.
