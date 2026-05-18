@@ -11,6 +11,9 @@ Claude has full access to your filesystem, tools, and codebase. Thread-continuou
 @bot pull last week's error logs and summarize the top 5 issues
 ```
 
+![](assets/industrial.png)
+![](assets/conversation.png)
+
 ---
 
 ## Requirements
