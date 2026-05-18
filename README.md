@@ -2,6 +2,8 @@
 
 > @mention a Slack bot → Claude Code session fires on your Mac → reply lands in the thread.
 
+![](assets/industrial.png)
+
 Claude has full access to your filesystem, tools, and codebase. Thread-continuous sessions mean follow-up mentions pick up where you left off. Safe in shared channels — non-authorized users get read-only access by default.
 
 ```
@@ -11,7 +13,6 @@ Claude has full access to your filesystem, tools, and codebase. Thread-continuou
 @bot pull last week's error logs and summarize the top 5 issues
 ```
 
-![](assets/industrial.png)
 ![](assets/conversation.png)
 
 ---
