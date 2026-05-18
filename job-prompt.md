@@ -92,7 +92,12 @@ Use Block Kit for richer replies. Templates are available at `$SLACK_TEMPLATES/`
 | Short answer, list, ack | `quick-answer.json` |
 | Findings, data, metrics | `report.json` |
 | Recommendations | `recommendations.json` |
-| Warning / error | `callout.json` |
+| Warning / error / callout | `callout.json` |
+| Task completed, files changed | `task-done.json` |
+| Pre-action plan (confirm before executing) | `plan.json` |
+| Code / PR review with findings | `code-review.json` |
+| Error root cause + fix | `debug.json` |
+| Side-by-side option comparison | `comparison.json` |
 
 Usage:
 ```bash

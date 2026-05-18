@@ -1,0 +1,35 @@
+[
+  {
+    "type": "header",
+    "text": { "type": "plain_text", "text": "Code Review: <branch or PR title>", "emoji": true }
+  },
+  {
+    "type": "context",
+    "elements": [
+      { "type": "mrkdwn", "text": "_<N> files • +<X> additions −<Y> deletions_" }
+    ]
+  },
+  { "type": "divider" },
+  {
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "*Summary*\nOne paragraph describing what this change does and the overall quality."
+    }
+  },
+  {
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "*Findings*\n🚨 `file.ts:42` — *blocker* — description of the issue\n⚠️ `file.ts:18` — *warning* — something worth fixing before merge\nℹ️ `file.ts:7` — *nit* — optional improvement"
+    }
+  },
+  { "type": "divider" },
+  {
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "*Verdict*\n✅ Approve  •  ⚠️ Approve with comments  •  🚨 Changes requested\n\n_Remove the options that don't apply._"
+    }
+  }
+]

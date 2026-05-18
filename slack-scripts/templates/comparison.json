@@ -1,0 +1,36 @@
+[
+  {
+    "type": "markdown",
+    "text": "## Comparing: <Option A> vs <Option B>\n\nOne sentence framing the decision."
+  },
+  {
+    "type": "table",
+    "rows": [
+      [
+        { "type": "raw_text", "text": "" },
+        { "type": "raw_text", "text": "Option A" },
+        { "type": "raw_text", "text": "Option B" }
+      ],
+      [
+        { "type": "raw_text", "text": "Criterion 1" },
+        { "type": "raw_text", "text": "Detail for A" },
+        { "type": "raw_text", "text": "Detail for B" }
+      ],
+      [
+        { "type": "raw_text", "text": "Criterion 2" },
+        { "type": "raw_text", "text": "Detail for A" },
+        { "type": "raw_text", "text": "Detail for B" }
+      ],
+      [
+        { "type": "raw_text", "text": "Criterion 3" },
+        { "type": "raw_text", "text": "Detail for A" },
+        { "type": "raw_text", "text": "Detail for B" }
+      ],
+      [
+        { "type": "raw_text", "text": "Best when" },
+        { "type": "raw_text", "text": "Use A if..." },
+        { "type": "raw_text", "text": "Use B if..." }
+      ]
+    ]
+  }
+]

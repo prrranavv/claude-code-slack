@@ -1,0 +1,27 @@
+[
+  {
+    "type": "header",
+    "text": { "type": "plain_text", "text": "Done: <task title>", "emoji": true }
+  },
+  {
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "One-sentence summary of what was accomplished and the outcome."
+    }
+  },
+  { "type": "divider" },
+  {
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "*Files changed*\n• `path/to/file.ts` — what changed\n• `path/to/other.ts` — what changed"
+    }
+  },
+  {
+    "type": "context",
+    "elements": [
+      { "type": "mrkdwn", "text": "⏱ <N>s elapsed • <N> files changed • Tests: ✅ pass / ❌ fail / ⬜ not run" }
+    ]
+  }
+]

@@ -1,0 +1,27 @@
+[
+  {
+    "type": "header",
+    "text": { "type": "plain_text", "text": "Plan: <goal>", "emoji": true }
+  },
+  {
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "Here's what I'll do — confirm to proceed or redirect."
+    }
+  },
+  { "type": "divider" },
+  {
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "1. *Step one* — what will happen\n2. *Step two* — what will happen\n3. *Step three* — what will happen"
+    }
+  },
+  {
+    "type": "context",
+    "elements": [
+      { "type": "mrkdwn", "text": "⚠️ Irreversible: list any file writes, git ops, or destructive commands here — or remove this line if none" }
+    ]
+  }
+]

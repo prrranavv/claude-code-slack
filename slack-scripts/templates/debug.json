@@ -1,0 +1,34 @@
+[
+  {
+    "type": "header",
+    "text": { "type": "plain_text", "text": "Debug: <component or error type>", "emoji": true }
+  },
+  { "type": "divider" },
+  {
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "*Error*\n```ErrorType: short error message on one line```"
+    }
+  },
+  {
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "*Root cause*\nExplanation of what went wrong and why."
+    }
+  },
+  {
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "*Fix*\nWhat was changed to resolve it. Reference `file.ts:line` if helpful."
+    }
+  },
+  {
+    "type": "context",
+    "elements": [
+      { "type": "mrkdwn", "text": "Status: ✅ Fixed  •  ⚠️ Partially mitigated  •  ❓ Needs investigation" }
+    ]
+  }
+]
