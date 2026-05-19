@@ -9,10 +9,9 @@
       "type": "overflow",
       "action_id": "callout_overflow",
       "options": [
-        { "text": { "type": "plain_text", "text": "📋 Create ticket", "emoji": true }, "value": "create_ticket" },
-        { "text": { "type": "plain_text", "text": "👁 View file", "emoji": true }, "value": "view_file" },
-        { "text": { "type": "plain_text", "text": "🔕 Snooze 24h", "emoji": true }, "value": "snooze" },
-        { "text": { "type": "plain_text", "text": "✅ Mark resolved", "emoji": true }, "value": "resolve" }
+        { "text": { "type": "plain_text", "text": "View details", "emoji": true }, "value": "view" },
+        { "text": { "type": "plain_text", "text": "Escalate", "emoji": true }, "value": "escalate" },
+        { "text": { "type": "plain_text", "text": "Dismiss", "emoji": true }, "value": "dismiss" }
       ]
     }
   }

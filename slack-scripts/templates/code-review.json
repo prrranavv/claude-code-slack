@@ -37,21 +37,21 @@
     "elements": [
       {
         "type": "button",
-        "text": { "type": "plain_text", "text": "Open PR", "emoji": true },
-        "url": "https://github.com/<org>/<repo>/pull/<number>",
-        "action_id": "open_pr"
+        "text": { "type": "plain_text", "text": "View", "emoji": true },
+        "url": "https://...",
+        "action_id": "action_view"
       },
       {
         "type": "button",
-        "text": { "type": "plain_text", "text": "Assign Reviewer", "emoji": true },
+        "text": { "type": "plain_text", "text": "Approve", "emoji": true },
         "style": "primary",
-        "action_id": "assign_reviewer"
+        "action_id": "action_confirm"
       },
       {
         "type": "button",
-        "text": { "type": "plain_text", "text": "Request Changes", "emoji": true },
+        "text": { "type": "plain_text", "text": "Request changes", "emoji": true },
         "style": "danger",
-        "action_id": "request_changes"
+        "action_id": "action_decline"
       }
     ]
   }

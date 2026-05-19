@@ -11,9 +11,9 @@
     },
     "accessory": {
       "type": "button",
-      "text": { "type": "plain_text", "text": "View Diff", "emoji": true },
-      "url": "https://github.com/<org>/<repo>/compare/<branch>",
-      "action_id": "view_diff"
+      "text": { "type": "plain_text", "text": "View", "emoji": true },
+      "url": "https://...",
+      "action_id": "task_view"
     }
   },
   { "type": "divider" },

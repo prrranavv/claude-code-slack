@@ -19,19 +19,19 @@
         "action_id": "plan_steps",
         "options": [
           {
-            "text": { "type": "mrkdwn", "text": "*Step 1* — description of first action" },
+            "text": { "type": "mrkdwn", "text": "*Step 1* — description of action" },
             "value": "step1",
-            "description": { "type": "mrkdwn", "text": "Safe — additive only, no existing state touched" }
+            "description": { "type": "mrkdwn", "text": "Risk level / what this touches" }
           },
           {
-            "text": { "type": "mrkdwn", "text": "*Step 2* — description of second action" },
+            "text": { "type": "mrkdwn", "text": "*Step 2* — description of action" },
             "value": "step2",
-            "description": { "type": "mrkdwn", "text": "Safe — no side effects" }
+            "description": { "type": "mrkdwn", "text": "Risk level / what this touches" }
           },
           {
-            "text": { "type": "mrkdwn", "text": "*Step 3* — description of third action ⚠️ irreversible" },
+            "text": { "type": "mrkdwn", "text": "*Step 3* — description of action" },
             "value": "step3",
-            "description": { "type": "mrkdwn", "text": "Confirm steps 1–2 are clean before proceeding" }
+            "description": { "type": "mrkdwn", "text": "Risk level / what this touches" }
           }
         ]
       }
