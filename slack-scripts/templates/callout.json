@@ -1,6 +1,19 @@
 [
   {
-    "type": "markdown",
-    "text": "> 🚨 **HIGH — Short title of the issue**\n>\n> One-paragraph explanation of what's wrong, who it affects, and the recommended next step.\n\nSeverity: 🚨 error/blocker • ⚠️ warning • ℹ️ info • ✅ success"
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "> :rotating_light: *HIGH — Short title of the issue*\n>\n> One-paragraph explanation of what's wrong, who it affects, and the recommended next step.\n\nSeverity: :rotating_light: error/blocker · :warning: warning · :information_source: info · :white_check_mark: success"
+    },
+    "accessory": {
+      "type": "overflow",
+      "action_id": "callout_overflow",
+      "options": [
+        { "text": { "type": "plain_text", "text": "📋 Create ticket", "emoji": true }, "value": "create_ticket" },
+        { "text": { "type": "plain_text", "text": "👁 View file", "emoji": true }, "value": "view_file" },
+        { "text": { "type": "plain_text", "text": "🔕 Snooze 24h", "emoji": true }, "value": "snooze" },
+        { "text": { "type": "plain_text", "text": "✅ Mark resolved", "emoji": true }, "value": "resolve" }
+      ]
+    }
   }
 ]

@@ -5,11 +5,21 @@
   },
   { "type": "divider" },
   {
-    "type": "section",
-    "text": {
-      "type": "mrkdwn",
-      "text": "*Error*\n```ErrorType: short error message on one line```"
-    }
+    "type": "rich_text",
+    "elements": [
+      {
+        "type": "rich_text_section",
+        "elements": [
+          { "type": "text", "text": "Error\n", "style": { "bold": true } }
+        ]
+      },
+      {
+        "type": "rich_text_preformatted",
+        "elements": [
+          { "type": "text", "text": "ErrorType: short error message\n  at ClassName.method (file.ts:line)" }
+        ]
+      }
+    ]
   },
   {
     "type": "section",
@@ -28,7 +38,7 @@
   {
     "type": "context",
     "elements": [
-      { "type": "mrkdwn", "text": "Status: ✅ Fixed  •  ⚠️ Partially mitigated  •  ❓ Needs investigation" }
+      { "type": "mrkdwn", "text": "Status: ✅ Fixed  ·  ⚠️ Partially mitigated  ·  ❓ Needs investigation" }
     ]
   }
 ]

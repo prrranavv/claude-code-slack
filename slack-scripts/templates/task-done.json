@@ -8,6 +8,12 @@
     "text": {
       "type": "mrkdwn",
       "text": "One-sentence summary of what was accomplished and the outcome."
+    },
+    "accessory": {
+      "type": "button",
+      "text": { "type": "plain_text", "text": "View Diff", "emoji": true },
+      "url": "https://github.com/<org>/<repo>/compare/<branch>",
+      "action_id": "view_diff"
     }
   },
   { "type": "divider" },
@@ -21,7 +27,7 @@
   {
     "type": "context",
     "elements": [
-      { "type": "mrkdwn", "text": "⏱ <N>s elapsed • <N> files changed • Tests: ✅ pass / ❌ fail / ⬜ not run" }
+      { "type": "mrkdwn", "text": "⏱ <N>s elapsed · <N> files changed · Tests: ✅ pass / ❌ fail / ⬜ not run" }
     ]
   }
 ]

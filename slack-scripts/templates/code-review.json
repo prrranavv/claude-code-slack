@@ -6,7 +6,7 @@
   {
     "type": "context",
     "elements": [
-      { "type": "mrkdwn", "text": "_<N> files • +<X> additions −<Y> deletions_" }
+      { "type": "mrkdwn", "text": "_<N> files · +<X> additions −<Y> deletions_" }
     ]
   },
   { "type": "divider" },
@@ -21,7 +21,7 @@
     "type": "section",
     "text": {
       "type": "mrkdwn",
-      "text": "*Findings*\n🚨 `file.ts:42` — *blocker* — description of the issue\n⚠️ `file.ts:18` — *warning* — something worth fixing before merge\nℹ️ `file.ts:7` — *nit* — optional improvement"
+      "text": "*Findings*\n:rotating_light: `file.ts:42` — *blocker* — description of the issue\n:warning: `file.ts:18` — *warning* — something worth fixing before merge\n:information_source: `file.ts:7` — *nit* — optional improvement"
     }
   },
   { "type": "divider" },
@@ -29,7 +29,30 @@
     "type": "section",
     "text": {
       "type": "mrkdwn",
-      "text": "*Verdict*\n✅ Approve  •  ⚠️ Approve with comments  •  🚨 Changes requested\n\n_Remove the options that don't apply._"
+      "text": "*Verdict*\n:rotating_light: Changes requested  ·  :warning: Approve with comments  ·  :white_check_mark: Approve"
     }
+  },
+  {
+    "type": "actions",
+    "elements": [
+      {
+        "type": "button",
+        "text": { "type": "plain_text", "text": "Open PR", "emoji": true },
+        "url": "https://github.com/<org>/<repo>/pull/<number>",
+        "action_id": "open_pr"
+      },
+      {
+        "type": "button",
+        "text": { "type": "plain_text", "text": "Assign Reviewer", "emoji": true },
+        "style": "primary",
+        "action_id": "assign_reviewer"
+      },
+      {
+        "type": "button",
+        "text": { "type": "plain_text", "text": "Request Changes", "emoji": true },
+        "style": "danger",
+        "action_id": "request_changes"
+      }
+    ]
   }
 ]

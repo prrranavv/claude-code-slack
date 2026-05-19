@@ -6,17 +6,34 @@
   {
     "type": "context",
     "elements": [
-      { "type": "mrkdwn", "text": "_Window: YYYY-MM-DD → YYYY-MM-DD • Source: <system>_" }
+      { "type": "mrkdwn", "text": "_Window: YYYY-MM-DD → YYYY-MM-DD · Source: <system>_" }
     ]
   },
   { "type": "divider" },
   {
-    "type": "markdown",
-    "text": "## TL;DR\n\nOne-paragraph summary of the most important finding."
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "*TL;DR*\n\nOne-paragraph summary of the most important finding."
+    },
+    "accessory": {
+      "type": "image",
+      "image_url": "https://quickchart.io/chart?c={type:'sparkline',data:{datasets:[{data:[10,12,9,14,11,16,13]}]}}&width=200&height=80",
+      "alt_text": "trend sparkline — replace URL with your chart"
+    }
   },
   {
-    "type": "markdown",
-    "text": "## Key findings\n\n- **Finding 1** — supporting detail.\n- **Finding 2** — supporting detail.\n- **Finding 3** — supporting detail."
+    "type": "section",
+    "text": {
+      "type": "mrkdwn",
+      "text": "*Key findings*\n\n• *Finding 1* — supporting detail.\n• *Finding 2* — supporting detail.\n• *Finding 3* — supporting detail."
+    }
+  },
+  {
+    "type": "image",
+    "image_url": "https://quickchart.io/chart?c={type:'bar',data:{labels:['A','B','C','D'],datasets:[{data:[10,20,15,25]}]}}&width=600&height=200",
+    "alt_text": "metric breakdown — replace URL with your chart",
+    "title": { "type": "plain_text", "text": "Metric breakdown — replace with your chart URL" }
   },
   { "type": "divider" }
 ]

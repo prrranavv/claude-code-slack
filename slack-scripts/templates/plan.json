@@ -7,16 +7,35 @@
     "type": "section",
     "text": {
       "type": "mrkdwn",
-      "text": "Here's what I'll do — confirm to proceed or redirect."
+      "text": "Here's what I'll do — check off each step to confirm, or reply to redirect."
     }
   },
   { "type": "divider" },
   {
-    "type": "section",
-    "text": {
-      "type": "mrkdwn",
-      "text": "1. *Step one* — what will happen\n2. *Step two* — what will happen\n3. *Step three* — what will happen"
-    }
+    "type": "actions",
+    "elements": [
+      {
+        "type": "checkboxes",
+        "action_id": "plan_steps",
+        "options": [
+          {
+            "text": { "type": "mrkdwn", "text": "*Step 1* — description of first action" },
+            "value": "step1",
+            "description": { "type": "mrkdwn", "text": "Safe — additive only, no existing state touched" }
+          },
+          {
+            "text": { "type": "mrkdwn", "text": "*Step 2* — description of second action" },
+            "value": "step2",
+            "description": { "type": "mrkdwn", "text": "Safe — no side effects" }
+          },
+          {
+            "text": { "type": "mrkdwn", "text": "*Step 3* — description of third action ⚠️ irreversible" },
+            "value": "step3",
+            "description": { "type": "mrkdwn", "text": "Confirm steps 1–2 are clean before proceeding" }
+          }
+        ]
+      }
+    ]
   },
   {
     "type": "context",
