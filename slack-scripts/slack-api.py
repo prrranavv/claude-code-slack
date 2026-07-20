@@ -13,6 +13,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
@@ -56,7 +57,6 @@ def _api_call(method, params=None, is_post=False, retry_on_ratelimit=True):
         req = urllib.request.Request(url, data=data, headers=headers)
     else:
         if params:
-            import urllib.parse
             qs = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
             url = f"{url}?{qs}"
         req = urllib.request.Request(url, headers=headers)
@@ -221,7 +221,6 @@ def cmd_react(args):
 
 
 def cmd_files(args):
-    import urllib.parse
     if not args.out:
         _fail("Must provide --out (absolute path to write the file to)")
     if not (args.file_id or args.url):

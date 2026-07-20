@@ -8,6 +8,9 @@ set -u
 
 CH="$1"
 TS="$2"
+# The real OS user, captured before USER is reused for the Slack user id below.
+# The claude CLI needs the true $USER to find its keychain credentials.
+OS_USER="$(/usr/bin/id -un)"
 USER="$3"
 
 # ─── Install dir & config ─────────────────────────────────────────────────────
@@ -278,7 +281,7 @@ $CONTEXT_BLOCK
 Before acting:
 1. **New messages since your last turn** are in the "Thread context" section above. Image attachments are pre-downloaded to \`/tmp/slackimg_<F...>.<ext>\` — use \`Read\` on those paths. Do NOT call \`\$SLACK replies\`, \`\$SLACK history\`, or \`\$SLACK files\` at turn start unless the section is empty (pre-fetch failed — fallback to calling \`\$SLACK replies --ts $THREAD_TS\`).
 2. Authorization re-check: this turn was sent by \`$USER\`. If that is NOT \`$AUTHORIZED_USER_ID\`$([ -n "${EXTRA_WRITE_USER_IDS:-}" ] && echo " or one of \`${EXTRA_WRITE_USER_IDS}\`"), refuse any write/destructive operations.
-3. Your prior context and tool results are still in memory — use them. Don't re-derive what you already know.
+3. Your prior context and tool results are still in memory — use them. Do not re-derive what you already know.
 4. Act ONLY on the new mention at $TS.
 
 All formatting rules from turn 1 remain in force. Write status to \`$STATUS_FILE\` when done.
@@ -402,7 +405,7 @@ CLAUDE_STDERR="${STATUS_DIR}/${TS//./_}.claude-stderr"
 spawn_claude() {
   if [ "$RESUME_MODE" = "resume" ]; then
     log "worker: spawning claude (model=$MODEL${FAST_LOG}, resume=$SESSION_UUID)"
-    "$CLAUDE_BIN" -p "$JOB_PROMPT" \
+    USER="$OS_USER" "$CLAUDE_BIN" -p "$JOB_PROMPT" \
       --resume "$SESSION_UUID" \
       --model "$MODEL" \
       ${FAST_FLAG[@]+"${FAST_FLAG[@]}"} \
@@ -411,7 +414,7 @@ spawn_claude() {
   elif [ "$FEATURE_ON" = "1" ]; then
     SESSION_UUID=$(/usr/bin/uuidgen | tr '[:upper:]' '[:lower:]')
     log "worker: spawning claude (model=$MODEL${FAST_LOG}, session=$SESSION_UUID)"
-    "$CLAUDE_BIN" -p "$JOB_PROMPT" \
+    USER="$OS_USER" "$CLAUDE_BIN" -p "$JOB_PROMPT" \
       --session-id "$SESSION_UUID" \
       --model "$MODEL" \
       ${FAST_FLAG[@]+"${FAST_FLAG[@]}"} \
@@ -419,7 +422,7 @@ spawn_claude() {
       >> "$LOG_FILE" 2> "$CLAUDE_STDERR" &
   else
     log "worker: spawning claude (model=$MODEL${FAST_LOG})"
-    "$CLAUDE_BIN" -p "$JOB_PROMPT" \
+    USER="$OS_USER" "$CLAUDE_BIN" -p "$JOB_PROMPT" \
       --model "$MODEL" \
       ${FAST_FLAG[@]+"${FAST_FLAG[@]}"} \
       --dangerously-skip-permissions \
