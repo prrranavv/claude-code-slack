@@ -141,10 +141,12 @@ def ensure_desk_card(ctx, channel: str, thread_ts: str, parsed: dict, backfill: 
     th = watch.read_state(watcher.state_path if watcher else None)["threads"].get(key) or {}
     card_ts = th.get("card_ts", "")
     if not card_ts:
+        import slack_reads
         try:
-            replies = ctx.web.conversations_replies(channel=channel, ts=thread_ts, limit=100).get("messages") or []
-        except Exception:
-            replies = []
+            replies = slack_reads.replies(ctx.web, channel, thread_ts, limit=100)
+        except Exception as e:  # noqa: BLE001  — SuspectRead or API error: fail closed, never a 2nd card
+            ctx.log.info(f"DAYCARE DESK dedupe read suspect for {channel}/{thread_ts} ({e}); not posting, will retry")
+            return ""
         legacy = next((m for m in replies if m.get("user") == ctx.bot_user_id
                        and any(b.get("block_id") == "dcs_run" for b in m.get("blocks") or [])), None)
         card_ts = legacy.get("ts", "") if legacy else ""
@@ -183,8 +185,20 @@ def on_parent(ctx, evt: dict) -> bool:
         if ts in _parents_seen:
             return True
         _parents_seen.add(ts)
-    threading.Timer(CARD_DELAY_SECONDS, ensure_desk_card, args=(ctx, evt["channel"], ts, parsed)).start()
+    threading.Timer(CARD_DELAY_SECONDS, _ensure_with_retry, args=(ctx, evt["channel"], ts, parsed)).start()
     return True
+
+
+RETRY_DELAYS = (60, 180, 600)
+
+
+def _ensure_with_retry(ctx, channel: str, ts: str, parsed: dict, attempt: int = 0) -> None:
+    """A suspect dedupe read posts nothing; try again later (the backfill loop also catches it)."""
+    if ensure_desk_card(ctx, channel, ts, parsed) or attempt >= len(RETRY_DELAYS):
+        return
+    t = threading.Timer(RETRY_DELAYS[attempt], _ensure_with_retry, args=(ctx, channel, ts, parsed, attempt + 1))
+    t.daemon = True
+    t.start()
 
 
 def record_run(ctx, channel: str, thread_ts: str, label: str, user: str) -> bool:
@@ -284,12 +298,13 @@ def triage(ctx, evt: dict, model=triage_model) -> bool:
     thread_ts = evt.get("thread_ts") or ts
     parent, recent = "", ""
     if thread_ts != ts:
-        try:
-            msgs = ctx.web.conversations_replies(channel=channel, ts=thread_ts, limit=40).get("messages") or []
-            parent = (msgs[0].get("text") or "") if msgs else ""
+        import slack_reads
+        try:  # context only: a suspect read degrades to "no context", never blocks triage
+            msgs = slack_reads.replies(ctx.web, channel, thread_ts, limit=40, backoff=(3,))
+            parent = next((m.get("text") or "" for m in msgs if m.get("ts") == thread_ts), "")
             recent = "\n".join(f"- {(m.get('text') or '')[:200]}" for m in msgs[1:][-6:] if m.get("ts") != ts)
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            ctx.log.info(f"DAYCARE TRIAGE context read suspect {channel}/{thread_ts}: {e}")
     relevant, why = model(evt.get("text") or "", parent, recent)
     ctx.log.info(f"DAYCARE TRIAGE {'relevant' if relevant else 'ignore'} {channel}/{ts}: {why}")
     if relevant:

@@ -197,9 +197,9 @@ def _strip_buttons(ctx, payload: dict, channel: str, also=()) -> bool:
             continue
         try:
             # Desk cards are thread replies, which only conversations.replies returns.
-            found = next((m for m in (ctx.web.conversations_replies(
-                channel=channel, ts=thread_ts, oldest=other, latest=other, inclusive=True, limit=2
-            ).get("messages") or []) if m.get("ts") == other), None)
+            import slack_reads
+            found = next((m for m in slack_reads.replies(ctx.web, channel, thread_ts, limit=200, backoff=(3, 10))
+                          if m.get("ts") == other), None)
             if found:
                 ctx.web.chat_update(channel=channel, ts=other, text=found.get("text") or "Sending",
                                     blocks=[b for b in found.get("blocks") or [] if b.get("type") != "actions"])
@@ -576,9 +576,19 @@ def post_run_buttons(ctx, evt: dict) -> None:
     threading.Timer(RUN_CARD_DELAY_SECONDS, _post_run_card, args=(ctx, evt.get("channel", ""), ts)).start()
 
 
-def _post_run_card(ctx, channel: str, thread_ts: str) -> None:
+def _post_run_card(ctx, channel: str, thread_ts: str, attempt: int = 0) -> None:
+    import slack_reads
     try:
-        replies = ctx.web.conversations_replies(channel=channel, ts=thread_ts, limit=50).get("messages") or []
+        try:
+            replies = slack_reads.replies(ctx.web, channel, thread_ts, limit=50)
+        except slack_reads.SuspectRead as e:
+            # Fail closed: never risk a second run card on a throttled (empty) read.
+            ctx.log.info(f"DAYCARE RUN CARD dedupe read suspect {channel}/{thread_ts} ({e}); retry later")
+            if attempt < 3:
+                t = threading.Timer(120 * (attempt + 1), _post_run_card, args=(ctx, channel, thread_ts, attempt + 1))
+                t.daemon = True
+                t.start()
+            return
         if any(m.get("user") == ctx.bot_user_id
                and any(b.get("block_id") == "dcs_run" for b in m.get("blocks") or []) for m in replies):
             return

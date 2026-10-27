@@ -921,27 +921,40 @@ class Watcher:
                     s["threads"][th_key]["reaction"] = target
 
     # backfill + loop ---------------------------------------------------------
-    def backfill(self, channel: str, days: int = WATCH_STATUS_DAYS) -> int:
-        """Register Angie submission parents from the last `days` days (status only for old ones)."""
+    def backfill(self, channel: str, days: int = WATCH_STATUS_DAYS) -> dict | None:
+        """Register Angie submission parents from the last `days` days (status only for old ones).
+
+        None = the history read was suspect (throttled → empty); the caller retries next loop.
+        Otherwise {"messages", "parents", "registered", "deferred"}; idempotent via known threads.
+        """
         import daycare_desk as desk
+        import slack_reads
         oldest = time.time() - days * 86400
-        n = 0
         try:
-            msgs = self.ctx.web.conversations_history(channel=channel, oldest=str(oldest), limit=200).get("messages") or []
+            msgs = slack_reads.history(self.ctx.web, channel, oldest=str(oldest), limit=200)
+        except slack_reads.SuspectRead as e:
+            self.log(f"backfill {channel}: suspect read ({e}); retrying next loop")
+            return None
         except Exception as e:  # noqa: BLE001
             self.log(f"backfill {channel} failed: {e}")
-            return 0
+            return None
         known = read_state(self.state_path)["threads"]
+        out = {"messages": len(msgs), "parents": 0, "registered": 0, "deferred": 0}
         for m in msgs:
             evt = {**m, "type": "message", "channel": channel}
-            if not desk.is_parent(evt) or thread_key(channel, m["ts"]) in known:
+            if not desk.is_parent(evt):
+                continue
+            out["parents"] += 1
+            if thread_key(channel, m["ts"]) in known:
                 continue
             parsed = parse_parent(m.get("text", ""))
             if not parsed:
                 continue
-            desk.ensure_desk_card(self.ctx, channel, m["ts"], parsed, backfill=True, watcher=self)
-            n += 1
-        return n
+            if desk.ensure_desk_card(self.ctx, channel, m["ts"], parsed, backfill=True, watcher=self):
+                out["registered"] += 1
+            else:
+                out["deferred"] += 1  # dedupe read was suspect: fail closed, retry next loop
+        return out
 
     def loop(self, stop: threading.Event | None = None) -> None:
         stop = stop or threading.Event()
@@ -949,8 +962,13 @@ class Watcher:
         while not stop.is_set():
             try:
                 for ch in desk_channels() - backfilled:
-                    self.log(f"backfill {ch}: {self.backfill(ch)} thread(s)")
-                    backfilled.add(ch)
+                    res = self.backfill(ch)
+                    if res is None:
+                        continue
+                    self.log(f"backfill {ch}: {res['registered']} thread(s) registered · {res['parents']} parent(s) "
+                             f"in {res['messages']} message(s) · {res['deferred']} deferred")
+                    if not res["deferred"]:
+                        backfilled.add(ch)
                 if in_hours():
                     for key in self.due():
                         self.tick_thread(key)

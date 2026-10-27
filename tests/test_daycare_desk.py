@@ -556,3 +556,104 @@ def test_present_error_parses_pretty_json():
 def test_send_result_has_no_error_on_success():
     assert desk._result("m1", None) == {"ok": True, "ref": "m1"}
     assert desk._result("", None) == {"ok": False, "error": "send failed"}
+
+
+# ── throttle-safe reads (Slack returns ok + empty when it throttles) ──────────
+
+import slack_reads  # noqa: E402
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    slept = []
+    monkeypatch.setattr(slack_reads.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(slack_reads, "MIN_GAP", 0)
+    return slept
+
+
+class SeqWeb(Web):
+    """Returns queued responses per method; the default for an exhausted queue is empty."""
+
+    def __init__(self, history=(), replies=()):
+        super().__init__()
+        self.q = {"conversations_history": list(history), "conversations_replies": list(replies)}
+
+    def __getattr__(self, name):
+        if name in ("conversations_history", "conversations_replies"):
+            def f(**kw):
+                self.calls.append((name, kw))
+                nxt = self.q[name].pop(0) if self.q[name] else {"ok": True, "messages": []}
+                if isinstance(nxt, Exception):
+                    raise nxt
+                return nxt
+            return f
+        return super().__getattr__(name)
+
+
+def test_history_empty_is_retried_then_suspect(no_sleep):
+    w = SeqWeb(history=[{"messages": []}, {"messages": [{"ts": "1"}]}])
+    assert slack_reads.history(w, "C") == [{"ts": "1"}] and no_sleep == [3]
+    with pytest.raises(slack_reads.SuspectRead):
+        slack_reads.history(SeqWeb(), "C")
+    assert no_sleep[1:] == [3, 10, 30]
+
+
+def test_replies_without_parent_is_suspect(no_sleep):
+    w = SeqWeb(replies=[{"messages": []}, {"messages": [{"ts": "9.9"}]}, {"messages": [{"ts": "5.0"}, {"ts": "5.1"}]}])
+    assert [m["ts"] for m in slack_reads.replies(w, "C", "5.0")] == ["5.0", "5.1"]
+    with pytest.raises(slack_reads.SuspectRead):
+        slack_reads.replies(SeqWeb(), "C", "5.0")
+
+
+def test_ratelimited_error_honours_retry_after(no_sleep):
+    class Resp(dict):
+        headers = {"Retry-After": "7"}
+
+    class RL(Exception):
+        response = Resp(error="ratelimited")
+    w = SeqWeb(history=[RL(), {"messages": [{"ts": "1"}]}])
+    assert slack_reads.history(w, "C") == [{"ts": "1"}] and 7.0 in no_sleep
+
+
+def test_backfill_suspect_history_is_not_final(no_sleep):
+    ctx = Ctx()
+    ctx.web = SeqWeb()
+    w = watch.Watcher(ctx, state_path=watch.STATE_PATH)
+    assert w.backfill("CPROD") is None
+    assert watch.read_state()["threads"] == {}
+
+
+def test_desk_card_dedupe_fails_closed(no_sleep, monkeypatch):
+    monkeypatch.setattr(watch, "hub_lookup", lambda c: {})
+    ctx = Ctx()
+    ctx.web = SeqWeb()  # replies always empty → throttled
+    assert desk.ensure_desk_card(ctx, "CPROD", "7.0", {"customer": "X", "owner_email": ""}, backfill=True) == ""
+    assert not ctx.web.named("chat_postMessage") and not ctx.web.named("chat_update")
+    assert watch.read_state()["threads"] == {}
+
+
+def test_backfill_adopts_existing_run_card_and_registers(no_sleep, monkeypatch):
+    monkeypatch.setattr(watch, "hub_lookup", lambda c: {"lead_id": "L"})
+    parent = {"ts": "8.0", "user": ANGIE, "text": "a@somainsure.com made the submission for: Acme Kids LLC"}
+    run_card = {"ts": "8.1", "user": BOT, "blocks": [{"type": "actions", "block_id": "dcs_run"}]}
+    ctx = Ctx()
+    page = {"messages": [parent, {"ts": "7.5", "user": "UX", "text": "hi"}]}
+    ctx.web = SeqWeb(history=[page, page],
+                     replies=[{"messages": [parent, run_card]}])
+    w = watch.Watcher(ctx, state_path=watch.STATE_PATH)
+    res = w.backfill("CPROD")
+    assert res == {"messages": 2, "parents": 1, "registered": 1, "deferred": 0}
+    assert not ctx.web.named("chat_postMessage")  # no second card
+    assert ctx.web.named("chat_update")[0]["ts"] == "8.1"
+    th = watch.read_state()["threads"]["CPROD:8.0"]
+    assert th["card_ts"] == "8.1" and th["backfill"] is True
+    assert w.backfill("CPROD")["registered"] == 0  # idempotent
+
+
+def test_legacy_run_card_fails_closed(no_sleep, monkeypatch):
+    timers = []
+    monkeypatch.setattr(actions.threading, "Timer", lambda *a, **k: timers.append(a) or type("T", (), {"start": lambda s: None, "daemon": True})())
+    ctx = Ctx()
+    ctx.web = SeqWeb()
+    actions._post_run_card(ctx, "CPROD", "9.0")
+    assert not ctx.web.named("chat_postMessage") and len(timers) == 1
