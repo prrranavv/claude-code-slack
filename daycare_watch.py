@@ -157,7 +157,7 @@ def core_name(name: str) -> str:
     return n
 
 
-LINE_LABELS = {"gl": "GL", "bop_bpp": "Property", "wc": "WC", "auto": "Auto"}
+LINE_LABELS = {"gl": "GL", "bop_bpp": "GL + Property", "wc": "WC", "auto": "Auto"}
 
 
 def _sql(query: str) -> list[dict]:
