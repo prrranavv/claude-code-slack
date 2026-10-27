@@ -500,3 +500,59 @@ def test_local_calls_are_capped(monkeypatch):
     [t.start() for t in ts]
     [t.join() for t in ts]
     assert peak[0] <= 2
+
+
+# ── customer quote (desk path) ────────────────────────────────────────────────
+
+import quote_present_desk as qpd  # noqa: E402
+
+
+def _cache(tmp_path, rows):
+    d = tmp_path / "carriers"
+    d.mkdir()
+    for r in rows:
+        (d / f"{r['slug']}.json").write_text(json.dumps(r))
+    return d
+
+
+def test_carrier_gate_exact_legal_name_only(tmp_path, monkeypatch):
+    markel = {"slug": "markel-insurance-company", "legal_name": "Markel Insurance Company", "aliases": ["Markel"],
+              "website": "https://markel.com", "blurb": "b", "admitted": "Admitted."}
+    monkeypatch.setenv("ANGIE_CARRIER_CACHE", str(_cache(tmp_path, [markel])))
+    work = tmp_path / "w"
+    work.mkdir()
+    cache, exact, flag = qpd.carrier_gate("Markel American Insurance Company", str(work))
+    assert exact is None and os.listdir(cache) == [] and "Markel Insurance Company" in flag
+    cache, exact, flag = qpd.carrier_gate("MARKEL INSURANCE COMPANY", str(work))
+    assert exact["slug"] == "markel-insurance-company" and flag == ""
+
+
+def test_cache_miss_stops_before_any_model_call(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANGIE_CARRIER_CACHE", str(_cache(tmp_path, [])))
+    monkeypatch.setattr(qpd, "WORK_BASE", str(tmp_path / "qp"))
+    called = []
+    card = {"id": "c", "test": True, "customer": "X", "quote": {"carrier": "Nowhere Ins Co", "premium": "$1.00"}, "source": "$1.00"}
+    res = qpd.draft_customer_quote(card, {}, llm=lambda p: called.append(p) or "{}")
+    assert res["ok"] is False and "exact" in res["error"] and not called
+
+
+def test_facts_copy_only_verbatim_figures_and_fixed_price():
+    src = "Each Occurrence $1,000,000 General Aggregate $2,000,000 Total $3,886.04 Quote No. Q-1"
+    out = json.dumps({"coverage": "general liability", "intro": "Hi Pranav, your quote is ready.",
+                      "price_label": "Total", "limits": [["Each occurrence", "$1,000,000"], ["Med pay", "$10,000"]],
+                      "sell_points": [["Big limits.", "Two million aggregate, $2,000,000."]], "quote_id": "Q-1",
+                      "flags": "Firearms excluded", "subjectivities": []})
+    card = {"customer": "X LLC", "who": "Luke (Hedge)", "quote": {"carrier": "Kinsale Insurance Company", "premium": "$3,886.04"}}
+    f = qpd.build_facts(card, {"contact_first": "Christina"}, src, {"website": "https://k.com", "blurb": "b"}, llm=lambda p: out)
+    assert f["price"]["amount"] == "$3,886.04" and f["carrier"]["name"] == "Kinsale Insurance Company"
+    assert f["limits"] == [["Each occurrence", "$1,000,000"]]  # $10,000 is not in the quote
+    assert f["intro"] == "Your quote is ready." and f["flags"] == ["Firearms excluded"] and "subjectivities" not in f
+
+
+def test_present_error_parses_pretty_json():
+    assert qpd.present_error('{\n "ok": false,\n "errors": ["a", "b"]\n}') == "a; b"
+
+
+def test_send_result_has_no_error_on_success():
+    assert desk._result("m1", None) == {"ok": True, "ref": "m1"}
+    assert desk._result("", None) == {"ok": False, "error": "send failed"}

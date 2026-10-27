@@ -31,7 +31,6 @@ import daycare_watch as watch  # noqa: E402
 
 WORK_ROOT = os.environ.get("SOMA_WORK_ROOT", os.path.expanduser("~/work"))
 SKILL_DIR = os.environ.get("DAYCARE_SUBMIT_DIR", os.path.join(WORK_ROOT, "customers/.agents/skills/daycare-submit"))
-QUOTE_PRESENT = os.path.join(WORK_ROOT, "soma/angie-miller/.claude/skills/quote-present/SKILL.md")
 HOME = os.path.expanduser("~")
 os.environ["PATH"] = f"{HOME}/.bun/bin:{HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", "/usr/bin:/bin")
 ANGIE_USER_IDS = set(os.environ.get("ANGIE_SLACK_USER_IDS", "U0CBAL1JRB6,U09QG7Y6X1C").split(","))
@@ -334,6 +333,7 @@ def make_card(cid: str, kind: str, channel: str, thread_ts: str, record: dict, i
             "customer": info.get("customer", "")}
     if kind == "quote":
         card["quote"] = record.get("quote") or {}
+        card["source"] = record.get("source", "")
         card["bind"] = {"to": (TEST_EMAIL_ if test else record.get("from", "")), "body": (record.get("quote") or {}).get("bind_body", "")}
         return card
     via = record.get("reply_channel") or "none"
@@ -390,6 +390,7 @@ def card_blocks(card: dict) -> list[dict]:
              "text": f":moneybag: *Quote — {card.get('who')}*\n{q.get('carrier') or '_Carrier: see quote_'}"}},
             {"type": "section", "fields": [
                 {"type": "mrkdwn", "text": f"*Premium (all-in)*\n{q.get('premium') or '_see quote_'}"},
+                {"type": "mrkdwn", "text": "*Status (per quote)*\n" + (q.get("admitted") or "_not stated_")},
                 {"type": "mrkdwn", "text": "*Quote*\n" + (", ".join(a for a in q.get("attachments") or [] if a) or "_in email_")}]},
         ]
         if q.get("terms"):
@@ -422,6 +423,9 @@ def card_blocks(card: dict) -> list[dict]:
                      confirm=_confirm("Send this email?", f"Sends this draft to {card.get('to')} from team@ now.", "Send")),
                 _btn("dcd_gmail_draft", "Open draft", url=_skill("slack_ui").draft_link(card.get("message_id", ""))),
                 _btn("dcd_dismiss", "Dismiss", value)]})
+        if card.get("notes"):
+            blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": "*Internal only*\n" + "\n".join(
+                f"• {n}" for n in card["notes"])[:2900]}]})
         if (stamp := _stamp_block(card)):
             blocks.append(stamp)
         return blocks
@@ -535,7 +539,7 @@ def handle_block_action(ctx, payload: dict) -> bool:
         if not _claim(f"present:{cid}", 120):
             _respond(payload, "Already drafting the customer quote.")
             return True
-        _present(ctx, card, clicker)
+        _present(ctx, card, clicker, payload)
     elif aid == "dcd_bind":
         if not _claim(f"bind:{cid}", 120):
             return True
@@ -568,7 +572,8 @@ def _send(ctx, payload: dict, cid: str, clicker: str) -> None:
             with _parents_lock:
                 _claims.pop(f"send:{cid}", None)
             _respond(payload, f"Not sent — {res.get('error')}")
-        ctx.log.info(f"DAYCARE CARD SEND {cid} by {clicker}: {res.get('ok')} {res.get('error', '')}")
+        ctx.log.info(f"DAYCARE CARD SEND {cid} by {clicker}: " + (f"sent {res.get('ref', '')}" if res.get("ok")
+                     else f"failed: {res.get('error')}"))
 
 
 def _recipients_ok(card: dict, live_to: str) -> bool:
@@ -592,13 +597,13 @@ def send_card(card: dict) -> dict:
         if not _recipients_ok(card, live.get("to", "")):
             return {"ok": False, "error": f"recipient changed in Gmail ({live.get('to')}) — send from Gmail"}
         res = ui.gmail("send-draft", card["draft_id"])
-        return {"ok": bool(res.get("id")), "ref": res.get("id", ""), "error": res.get("error", "send failed")}
+        return _result(res.get("id"), res.get("error"))
     if card.get("problems"):
         return {"ok": False, "error": "; ".join(card["problems"])}
     body = (card.get("body") or "").strip()
     if card.get("via") == "sms":
         res = ui.quo_send(QUO_LINE, card["to"], body)
-        return {"ok": bool(res.get("ok")), "ref": res.get("id", ""), "error": res.get("error", "")}
+        return _result(res.get("id") if res.get("ok") else "", res.get("error"))
     if card.get("via") != "email_reply" or not card.get("to"):
         return {"ok": False, "error": "nothing to send"}
     if card.get("gmail_thread_id") and not card.get("test"):
@@ -614,7 +619,12 @@ def send_card(card: dict) -> dict:
         ui.gmail("delete-draft", draft_id)
         return {"ok": False, "error": "draft recipient mismatch — nothing sent"}
     res = ui.gmail("send-draft", draft_id)
-    return {"ok": bool(res.get("id")), "ref": res.get("id", ""), "error": res.get("error", "send failed")}
+    return _result(res.get("id"), res.get("error"))
+
+
+def _result(ref, error) -> dict:
+    """ok ⇔ a provider id came back; an error string only on failure."""
+    return {"ok": True, "ref": ref} if ref else {"ok": False, "error": error or "send failed"}
 
 
 def _open_edit(ctx, payload: dict, card: dict) -> None:
@@ -660,27 +670,36 @@ def handle_view_submission(ctx, payload: dict) -> bool:
     return True
 
 
-def _present(ctx, card: dict, clicker: str) -> None:
-    q = card.get("quote") or {}
-    test = " TEST thread: the draft must be addressed to pranav@somainsure.com only." if card.get("test") else ""
-    instruction = (
-        f"<@{ctx.bot_user_id}> Draft the customer quote email for {card.get('customer')} with the quote-present skill "
-        f"({QUOTE_PRESENT}): {card.get('who')} quote" + (f", carrier \"{q.get('carrier')}\"" if q.get("carrier") else "")
-        + (f", team@ Gmail thread {card.get('gmail_thread_id')}" if card.get("gmail_thread_id") else "")
-        + f". Draft only, never send.{test} Then post its card: python3 {INSTALL_DIR}/daycare_desk.py draft-card "
-        f"--draft-id <draftId> --channel {card['channel']} --thread-ts {card['thread_ts']} --title \"Customer quote\". "
-        f"Your own reply: one line, only if something blocks.")
-    try:
-        res = ctx.web.chat_postMessage(channel=card["channel"], thread_ts=card["thread_ts"], text=instruction,
-                                       blocks=[{"type": "section", "text": {"type": "mrkdwn",
-                                                "text": f":arrow_forward: Draft customer quote · {card.get('who')} · <@{clicker}>"}}])
-    except Exception as e:  # noqa: BLE001
-        ctx.log.info(f"DAYCARE PRESENT post failed: {e}")
-        return
-    ctx.dispatch(card["channel"], res["ts"], clicker, instruction[:300], card["thread_ts"], "", False, instruction, False)
-    card["note"] = f"Customer quote requested by <@{clicker}>"
+def _present(ctx, card: dict, clicker: str, payload: dict | None = None) -> None:
+    """Draft customer quote: quote-present's renderer + checks, drafted via team@ (quote_present_desk)."""
+    card["note"] = f":hourglass_flowing_sand: Drafting the customer quote for <@{clicker}>…"
     _save_card(card)
     _render(ctx, card)
+    threading.Thread(target=_present_run, args=(ctx, card["id"], clicker, payload or {}), daemon=True).start()
+
+
+def _present_run(ctx, cid: str, clicker: str, payload: dict) -> None:
+    import quote_present_desk as qpd
+    card = _card(cid)
+    th = watch.read_state()["threads"].get(watch.thread_key(card["channel"], card["thread_ts"])) or {}
+    try:
+        res = qpd.draft_customer_quote(card, th.get("info") or {})
+    except Exception as e:  # noqa: BLE001
+        res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    card = _card(cid)
+    if res.get("ok"):
+        posted = post_draft_card(res["draft_id"], card["channel"], card["thread_ts"], "Customer quote",
+                                 web=ctx.web, notes=res.get("flags") or [])
+        card["note"] = (f"Customer quote drafted for <@{clicker}> in {res.get('seconds', '?')}s — review the card below"
+                        if posted.get("ok") else f":warning: Draft made but its card failed: {posted.get('error')}")
+    else:
+        card["note"] = f":warning: Customer quote not drafted — {res.get('error')}"
+        with _parents_lock:
+            _claims.pop(f"present:{cid}", None)
+    _save_card(card)
+    _render(ctx, card)
+    ctx.log.info(f"DAYCARE PRESENT {cid} by {clicker}: " + (f"draft {res.get('draft_id')} in {res.get('seconds')}s"
+                 if res.get("ok") else f"failed: {res.get('error')}"))
 
 
 def _bind_draft(ctx, payload: dict, cid: str, clicker: str) -> None:
@@ -718,7 +737,8 @@ class _CliWeb:
         return _skill("slack_ui").slack("chat.update", kw)
 
 
-def post_draft_card(draft_id: str, channel: str, thread_ts: str, title: str = "Draft", web=None) -> dict:
+def post_draft_card(draft_id: str, channel: str, thread_ts: str, title: str = "Draft", web=None,
+                    notes: list[str] | None = None) -> dict:
     ui = _skill("slack_ui")
     live = ui.readback(draft_id)
     if not live:
@@ -729,7 +749,7 @@ def post_draft_card(draft_id: str, channel: str, thread_ts: str, title: str = "D
     cid = hashlib.sha1(f"draft|{draft_id}".encode()).hexdigest()[:16]
     card = {"id": cid, "kind": "draft", "channel": channel, "thread_ts": thread_ts, "status": "open", "test": test,
             "title": title, "draft_id": draft_id, "message_id": live.get("message_id", ""), "to": live.get("to", ""),
-            "subject": live.get("subject", ""), "body": live.get("body", "")}
+            "subject": live.get("subject", ""), "body": live.get("body", ""), "notes": list(notes or [])[:8]}
     res = (web or _CliWeb()).chat_postMessage(channel=channel, thread_ts=thread_ts, text=card_text(card),
                                               blocks=card_blocks(card), unfurl_links=False)
     card["ts"] = res["ts"]

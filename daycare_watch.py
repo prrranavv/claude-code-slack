@@ -203,6 +203,7 @@ def hub_lookup(customer: str) -> dict:
         "submitted_by": (r.get("submitted_by_email") or "").lower(),
         "contact_email": (contact.get("email") or "").lower(),
         "contact_phone": re.sub(r"\D", "", contact.get("phone") or "")[-10:],
+        "contact_first": (contact.get("firstName") or "").strip(),
     }
 
 
@@ -532,6 +533,7 @@ EVENT_SCHEMA = {
         "summary": {"type": "string"},
         "carrier": {"type": "string"},
         "premium_all_in": {"type": "string"},
+        "admitted_status": {"type": "string"},
         "terms": {"type": "array", "items": {"type": "string"}},
         "subjectivities": {"type": "array", "items": {"type": "string"}},
         "reply_channel": {"type": "string", "enum": ["email_reply", "sms", "none"]},
@@ -556,6 +558,7 @@ material = Soma should know or act now (quote, decline, info_request, any substa
 summary: one plain line, under 110 characters, past tense, who did what (e.g. "Jake asked for 5-year loss runs and the signed ACORD 125").
 For quotes: carrier = the insurance company name copied EXACTLY as written in the quote (never reworded or abbreviated);
 premium_all_in = the total/all-in amount copied EXACTLY as written (with $ and cents) — the total including taxes and fees if the quote states one, otherwise the premium; never add numbers yourself; empty string if unclear.
+admitted_status = the quote's own words on admitted vs non-admitted / surplus lines, copied EXACTLY (e.g. "Non-Admitted", "surplus lines"); empty string if the quote does not say.
 terms = up to 4 short key terms copied from the quote (limits, claims-made vs occurrence, notable exclusions such as abuse/molestation, quote expiry).
 subjectivities = up to 5 short items the market needs before binding, copied from the quote.
 bind_request_body = for quotes only: a short plain-text reply to the wholesaler asking what they need to bind and confirming the subjectivities, signed "Thanks,\\nPranav\\nSoma Insurance Services". Do not commit to binding.
@@ -621,8 +624,19 @@ def claude_local(prompt: str, model: str, timeout: int) -> tuple[int, str]:
     with LOCAL_SLOTS:
         proc = subprocess.run([claude_bin(), "-p", prompt, "--model", model, "--max-turns", "1",
                                "--strict-mcp-config", "--output-format", "text"],
-                              capture_output=True, text=True, timeout=timeout, env=env, cwd=cwd)
+                              capture_output=True, text=True, timeout=timeout, env=env, cwd=cwd,
+                              stdin=subprocess.DEVNULL)  # claude -p appends stdin to the prompt
     return proc.returncode, proc.stdout or ""
+
+
+def extract_json(out: str) -> dict:
+    """The JSON object in a model reply: a ```json fence if there is one, else the outermost braces."""
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", out or "", re.S)
+    text = m.group(1) if m else (out or "")[(out or "").find("{"):(out or "").rfind("}") + 1]
+    value = json.loads(text)
+    if not isinstance(value, dict):
+        raise ValueError("not an object")
+    return value
 
 
 def run_local(prompt: str) -> dict:
@@ -632,9 +646,8 @@ def run_local(prompt: str) -> dict:
         code, out = claude_local(full, LOCAL_MODEL, 600)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "local analysis timed out"}
-    start, end = out.find("{"), out.rfind("}")
     try:
-        payload = json.loads(out[start:end + 1])
+        payload = extract_json(out)
     except ValueError:
         return {"ok": False, "error": f"local analysis returned no JSON (exit {code})"}
     return {"ok": isinstance(payload.get("events"), list), "payload": payload, "lane": "local"}
@@ -748,7 +761,9 @@ class Watcher:
             items = [n for n in (normalize(r, objects) for r in timeline) if n]
         if self.fixture_path and is_test_channel(th.get("channel", "")) and os.path.exists(self.fixture_path):
             with open(self.fixture_path) as f:
-                items += [json.loads(line) for line in f if line.strip()]
+                fx = [json.loads(line) for line in f if line.strip()]
+            # An item may name its test thread; unscoped items apply to every test thread.
+            items += [i for i in fx if i.get("thread_ts") in (None, "", th.get("thread_ts"))]
         return items
 
     def _tick(self, key: str, force: bool) -> dict:
@@ -841,11 +856,13 @@ class Watcher:
             rec["quote"] = {
                 "carrier": verbatim(ev.get("carrier", ""), sources),
                 "premium": verbatim(ev.get("premium_all_in", ""), sources),
+                "admitted": verbatim(ev.get("admitted_status", ""), sources),
                 "terms": figures_verbatim(ev.get("terms") or [], sources)[:4],
                 "subjectivities": figures_verbatim(ev.get("subjectivities") or [], sources)[:5],
                 "bind_body": (ev.get("bind_request_body") or "").strip(),
                 "attachments": [a.get("name") for a in item.get("attachments") or []],
             }
+            rec["source"] = "\n\n".join(s for s in sources if s)[:20000]
         return rec
 
     # posting -----------------------------------------------------------------
