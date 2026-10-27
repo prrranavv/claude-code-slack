@@ -245,23 +245,15 @@ Message to triage (from a teammate): {text}
 Reply with JSON only: {{"relevant": true or false, "why": "<8 words"}}"""
 
 
-def _claude_bin() -> str:
-    return os.environ.get("CLAUDE_BIN") or os.path.join(HOME, ".local/bin/claude")
-
-
 def triage_model(text: str, parent: str = "", recent: str = "") -> tuple[bool, str]:
+    """Haiku on Loma's local Claude, sharing the watcher's concurrency cap."""
     prompt = TRIAGE_PROMPT.format(parent=(parent or "(top-level message)")[:600], recent=(recent or "(none)")[:2000],
                                   text=text[:2000])
-    os.makedirs(os.path.join(INSTALL_DIR, "triage"), exist_ok=True)
-    env = {**os.environ, "USER": os.environ.get("OS_USER") or _os_user(), "HOME": HOME}
     try:
-        proc = subprocess.run([_claude_bin(), "-p", prompt, "--model", "haiku", "--max-turns", "1",
-                               "--strict-mcp-config", "--output-format", "text"],
-                              capture_output=True, text=True, timeout=90, env=env,
-                              cwd=os.path.join(INSTALL_DIR, "triage"))
+        _, out = watch.claude_local(prompt, os.environ.get("DAYCARE_TRIAGE_MODEL", "haiku"), 90)
     except subprocess.TimeoutExpired:
         return False, "triage timed out"
-    return parse_triage(proc.stdout)
+    return parse_triage(out)
 
 
 def parse_triage(out: str) -> tuple[bool, str]:
@@ -273,14 +265,6 @@ def parse_triage(out: str) -> tuple[bool, str]:
     except ValueError:
         return False, "unparseable triage output"
     return bool(d.get("relevant")), str(d.get("why", ""))[:80]
-
-
-def _os_user() -> str:
-    try:
-        import pwd
-        return pwd.getpwuid(os.getuid()).pw_name
-    except Exception:
-        return "pranav"
 
 
 _triaged: set[tuple[str, str]] = set()

@@ -590,40 +590,60 @@ def build_prompt(th: dict, new: list[dict], context: list[dict], parties: dict) 
             + "\n\n## New incoming items (classify every one)\n" + "\n\n".join(blocks))
 
 
-def run_local(prompt: str) -> dict:
-    """Fallback lane (DAYCARE_WATCH_LANE=local): one local `claude -p` sonnet call, no tools."""
+# Pranav 2026-10-27: all desk model work runs on Loma's own local Claude (the CLI and
+# account Loma's workers use). The Angie pool is an opt-in alternative
+# (DAYCARE_WATCH_LANE=pool), never a fallback: a failed call posts nothing and the
+# items are retried next tick.
+LOCAL_MODEL = os.environ.get("DAYCARE_WATCH_MODEL", "sonnet")
+LOCAL_SLOTS = threading.BoundedSemaphore(int(os.environ.get("DAYCARE_LOCAL_MAX", "2")))  # shared 16 GB Mac
+
+
+def claude_bin() -> str:
+    """Loma's claude binary: CLAUDE_BIN from the env, else from config.env (read, never printed)."""
+    if os.environ.get("CLAUDE_BIN"):
+        return os.environ["CLAUDE_BIN"]
+    try:
+        with open(os.path.join(INSTALL_DIR, "config.env")) as f:
+            for line in f:
+                if line.startswith("CLAUDE_BIN="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return os.path.join(HOME, ".local/bin/claude")
+
+
+def claude_local(prompt: str, model: str, timeout: int) -> tuple[int, str]:
+    """One `claude -p` call as the OS user, no tools/MCP, capped at DAYCARE_LOCAL_MAX at a time."""
     import pwd
-    env = {**RUN_ENV, "USER": pwd.getpwuid(os.getuid()).pw_name}
+    env = {**RUN_ENV, "USER": pwd.getpwuid(os.getuid()).pw_name, "HOME": HOME}
+    cwd = os.path.join(INSTALL_DIR, "triage")
+    os.makedirs(cwd, exist_ok=True)
+    with LOCAL_SLOTS:
+        proc = subprocess.run([claude_bin(), "-p", prompt, "--model", model, "--max-turns", "1",
+                               "--strict-mcp-config", "--output-format", "text"],
+                              capture_output=True, text=True, timeout=timeout, env=env, cwd=cwd)
+    return proc.returncode, proc.stdout or ""
+
+
+def run_local(prompt: str) -> dict:
     full = (prompt + "\n\nOutput ONLY one JSON object matching this JSON schema, no prose:\n"
             + json.dumps(EVENT_SCHEMA, separators=(",", ":")))
-    os.makedirs(os.path.join(INSTALL_DIR, "triage"), exist_ok=True)
     try:
-        proc = subprocess.run([os.environ.get("CLAUDE_BIN") or os.path.join(HOME, ".local/bin/claude"), "-p", full,
-                               "--model", "sonnet", "--max-turns", "1", "--strict-mcp-config", "--output-format", "text"],
-                              capture_output=True, text=True, timeout=600, env=env,
-                              cwd=os.path.join(INSTALL_DIR, "triage"))
+        code, out = claude_local(full, LOCAL_MODEL, 600)
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "local analysis timed out"}
-    out = proc.stdout or ""
     start, end = out.find("{"), out.rfind("}")
     try:
         payload = json.loads(out[start:end + 1])
     except ValueError:
-        return {"ok": False, "error": "local analysis returned no JSON"}
+        return {"ok": False, "error": f"local analysis returned no JSON (exit {code})"}
     return {"ok": isinstance(payload.get("events"), list), "payload": payload, "lane": "local"}
 
 
-def run_pool(prompt: str, key: str, lead_id: str, allow_local: bool = False) -> dict:
-    """Angie pool (shared admission). Test channels may fall back to one local call;
-    production never does (DAYCARE_WATCH_LANE=local forces local everywhere, for outages)."""
-    if os.environ.get("DAYCARE_WATCH_LANE", "pool") == "local":
-        return run_local(prompt)
-    res = _run_pool(prompt, key, lead_id)
-    if not res.get("ok") and allow_local:
-        local = run_local(prompt)
-        local["pool_error"] = res.get("error", "")
-        return local
-    return res
+def run_analysis(prompt: str, key: str, lead_id: str) -> dict:
+    if os.environ.get("DAYCARE_WATCH_LANE", "local") == "pool":
+        return _run_pool(prompt, key, lead_id)
+    return run_local(prompt)
 
 
 def _run_pool(prompt: str, key: str, lead_id: str) -> dict:
@@ -664,7 +684,7 @@ class Watcher:
         self._busy: set[str] = set()
         self._busy_lock = threading.Lock()
         self.fetch = fetch_timeline
-        self.pool = run_pool
+        self.pool = run_analysis
         self.wins = won_in_slack
 
     def log(self, msg: str) -> None:
@@ -754,8 +774,7 @@ class Watcher:
             context = [i for i in items if i["direction"] == "out"][-6:]
             prompt = build_prompt(th, incoming, context, parties)
             req_key = hashlib.sha256((key + "|" + ",".join(i["id"] for i in incoming)).encode()).hexdigest()[:32]
-            res = self.pool(prompt, req_key, (th.get("info") or {}).get("lead_id", ""),
-                            **({"allow_local": True} if is_test_channel(th.get("channel", "")) else {}))
+            res = self.pool(prompt, req_key, (th.get("info") or {}).get("lead_id", ""))
             if res.get("ok"):
                 by_id = {i["id"]: i for i in incoming}
                 for ev in (res.get("payload") or {}).get("events") or []:

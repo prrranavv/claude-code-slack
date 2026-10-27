@@ -451,3 +451,52 @@ def test_next_action_lists_two_open_asks():
         "a": {"kind": "info_request", "party": "wholesaler", "desk": "Jake (RT)", "org": "Jake (RT)", "at": iso(2)},
         "b": {"kind": "customer_question", "party": "customer", "at": iso(3)}}}
     assert watch.derive_status(th, [SENT_JAKE], d)["next"] == "reply to the customer · answer Jake (RT)"
+
+
+def test_local_lane_is_default_and_pool_is_opt_in(monkeypatch):
+    calls = []
+    monkeypatch.setattr(watch, "run_local", lambda p: calls.append("local") or {"ok": True, "payload": {"events": []}})
+    monkeypatch.setattr(watch, "_run_pool", lambda *a: calls.append("pool") or {"ok": False, "error": "401"})
+    monkeypatch.delenv("DAYCARE_WATCH_LANE", raising=False)
+    assert watch.run_analysis("p", "k", "L")["ok"] and calls == ["local"]
+    monkeypatch.setenv("DAYCARE_WATCH_LANE", "pool")
+    assert watch.run_analysis("p", "k", "L")["ok"] is False and calls == ["local", "pool"]  # no fallback chain
+
+
+def test_local_failure_posts_nothing_and_retries(monkeypatch):
+    monkeypatch.setattr(time, "time", lambda: PARENT_TS + 6 * 3600)
+    ctx = Ctx()
+    items = [SENT_JAKE]
+    w = make_watcher(ctx, items, lambda: [])
+    w.pool = lambda *a, **k: {"ok": False, "error": "local analysis returned no JSON"}
+    key = f"CTEST:{PARENT_TS}"
+    w.register("CTEST", str(PARENT_TS), {"customer": "B", "lead_id": "L1"})
+    w.tick_thread(key)
+    posts = len(ctx.web.named("chat_postMessage"))
+    items.append(JAKE_ASK)
+    w.tick_thread(key, force=True)
+    assert len(ctx.web.named("chat_postMessage")) == posts
+    assert "i2" not in watch.read_state()["threads"][key]["seen"]
+
+
+def test_local_calls_are_capped(monkeypatch):
+    import threading as th
+    live, peak = [0], [0]
+    lock = th.Lock()
+
+    class P:
+        returncode, stdout = 0, '{"relevant": false, "why": "x"}'
+
+    def fake_run(*a, **k):
+        with lock:
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+        time.sleep(0.05)
+        with lock:
+            live[0] -= 1
+        return P()
+    monkeypatch.setattr(watch.subprocess, "run", fake_run)
+    ts = [th.Thread(target=watch.claude_local, args=("p", "haiku", 5)) for _ in range(6)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert peak[0] <= 2
