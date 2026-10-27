@@ -88,7 +88,7 @@ def is_parent(evt: dict) -> bool:
     """A new Angie submission parent (or Pranav's stand-in in a test channel)."""
     channel = evt.get("channel", "")
     authors = ANGIE_USER_IDS | ({OWNER_ID} if watch.is_test_channel(channel) else set())
-    return (evt.get("type") == "message" and watch.is_desk_channel(channel)
+    return (evt.get("type") == "message" and watch.in_desk_window(channel, evt.get("ts"))
             and evt.get("user") in authors and not evt.get("subtype")
             and evt.get("thread_ts") in (None, "", evt.get("ts"))
             and "made the submission for" in (evt.get("text") or ""))
@@ -131,6 +131,8 @@ def _owner_id(ctx, email: str) -> str:
 
 def ensure_desk_card(ctx, channel: str, thread_ts: str, parsed: dict, backfill: bool = False, watcher=None) -> str:
     """Post (or adopt) the desk card in a submission thread and register it with the watcher."""
+    if not watch.in_desk_window(channel, thread_ts):
+        return ""
     watcher = watcher or watch.get(ctx)
     hub = watch.hub_lookup(parsed["customer"]) if parsed.get("customer") else {}
     info = {"customer": parsed["customer"], "owner_email": parsed.get("owner_email", ""),
@@ -228,6 +230,8 @@ def prefilter(evt: dict, bot_user_id: str) -> str:
     """Deterministic first pass. Returns a skip reason, or '' when the message goes to the model."""
     if not watch.is_desk_channel(evt.get("channel", "")):
         return "not a desk channel"
+    if not watch.in_desk_window(evt.get("channel", ""), evt.get("thread_ts") or evt.get("ts")):
+        return "before the desk go-live cutoff"
     if evt.get("bot_id") or evt.get("subtype") or evt.get("user") in ({bot_user_id} | ANGIE_USER_IDS):
         return "bot or system"
     if evt.get("channel_type") == "im":
@@ -288,7 +292,7 @@ def triage(ctx, evt: dict, model=triage_model) -> bool:
     reason = prefilter(evt, ctx.bot_user_id)
     channel, ts = evt.get("channel", ""), evt.get("ts", "")
     if reason:
-        if reason not in ("not a desk channel", "bot or system"):
+        if reason not in ("not a desk channel", "bot or system", "before the desk go-live cutoff"):
             ctx.log.info(f"DAYCARE TRIAGE skip {channel}/{ts}: {reason}")
         return False
     with _parents_lock:

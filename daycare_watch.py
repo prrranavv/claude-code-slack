@@ -72,6 +72,31 @@ def is_test_channel(channel: str) -> bool:
     return channel in test_channels()
 
 
+# Go-live cutoff (Pranav 2026-10-27: "skip existing submissions, only future ones"). A production
+# thread whose parent is older than this is never registered, carded, triaged, ticked or reacted.
+# Test channels are exempt. Default = 2026-10-27 13:35 ET, the #daycare-submission cutover.
+DESK_SINCE_DEFAULT = 1793122500
+
+
+def desk_since() -> float:
+    try:
+        return float(os.environ.get("DAYCARE_DESK_SINCE") or DESK_SINCE_DEFAULT)
+    except ValueError:
+        return float(DESK_SINCE_DEFAULT)
+
+
+def in_desk_window(channel: str, thread_ts) -> bool:
+    """Desk channel AND (test channel, or a thread started at/after the go-live cutoff)."""
+    if not is_desk_channel(channel):
+        return False
+    if is_test_channel(channel):
+        return True
+    try:
+        return float(thread_ts or 0) >= desk_since()
+    except (TypeError, ValueError):
+        return False
+
+
 TEST_EMAIL = "pranav@somainsure.com"
 TEST_PHONE = "+19032895495"  # Daycare - Pranav — +1 (903) 289-5495
 WATCH_CARD_HOURS = int(os.environ.get("DAYCARE_WATCH_HOURS", "72"))    # suggestion/quote cards
@@ -806,6 +831,8 @@ class Watcher:
 
     # registration ------------------------------------------------------------
     def register(self, channel: str, thread_ts: str, info: dict, card_ts: str = "", backfill: bool = False) -> None:
+        if not in_desk_window(channel, thread_ts):
+            return
         key = thread_key(channel, thread_ts)
         with state(self.state_path) as s:
             th = s["threads"].setdefault(key, {"channel": channel, "thread_ts": thread_ts, "seen": [],
@@ -830,7 +857,7 @@ class Watcher:
         now = now or time.time()
         out = []
         for key, th in read_state(self.state_path)["threads"].items():
-            if th.get("closed") or not is_desk_channel(th.get("channel", "")):
+            if th.get("closed") or not in_desk_window(th.get("channel", ""), th.get("thread_ts")):
                 continue
             if now - float(th.get("thread_ts") or now) > WATCH_STATUS_DAYS * 86400:
                 continue
@@ -897,6 +924,8 @@ class Watcher:
         th = read_state(self.state_path)["threads"].get(key)
         if not th:
             return {"skipped": "unknown thread"}
+        if not in_desk_window(th.get("channel", ""), th.get("thread_ts")):
+            return {"skipped": "before the desk go-live cutoff"}
         now = time.time()
         age = now - float(th["thread_ts"])
         items = self._items(th)
@@ -1067,7 +1096,7 @@ class Watcher:
         """
         import daycare_desk as desk
         import slack_reads
-        oldest = time.time() - days * 86400
+        oldest = max(time.time() - days * 86400, 0 if is_test_channel(channel) else desk_since())
         try:
             msgs = slack_reads.history(self.ctx.web, channel, oldest=str(oldest), limit=200)
         except slack_reads.SuspectRead as e:

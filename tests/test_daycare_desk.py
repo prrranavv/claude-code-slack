@@ -69,6 +69,7 @@ class Ctx:
 @pytest.fixture(autouse=True)
 def tmp_state(tmp_path, monkeypatch):
     monkeypatch.setattr(watch, "STATE_PATH", str(tmp_path / "state.json"))
+    monkeypatch.setenv("DAYCARE_DESK_SINCE", "0")  # cutoff tests set their own
     monkeypatch.setattr(watch, "load_desks", lambda path=None: _desks())
     desk._triaged.clear()
     desk._claims.clear()
@@ -741,3 +742,36 @@ def test_wins_counts_block_only_posts(monkeypatch):
     assert watch.won_in_slack("Scheving Enterprises LLC", PARENT_TS) is True
     P.stdout = json.dumps([{"text": "Closed Brightstar DPS today"}])
     assert watch.won_in_slack("Scheving Enterprises LLC", PARENT_TS) is False
+
+
+# ── go-live cutoff: prod threads before it are never touched ──────────────────
+
+def test_cutoff_blocks_old_prod_threads_everywhere(monkeypatch, no_sleep):
+    monkeypatch.setenv("DAYCARE_DESK_SINCE", "1000")
+    text = "a@somainsure.com made the submission for: Old Kids LLC"
+    old = {"type": "message", "channel": "CPROD", "user": ANGIE, "ts": "999.0", "text": text}
+    new = {**old, "ts": "1001.0"}
+    assert not desk.is_parent(old) and desk.is_parent(new)
+    assert desk.is_parent({**old, "channel": "CTEST"})  # test channels are exempt
+    assert desk.prefilter({**evt("eff date is 11/15"), "channel": "CPROD", "thread_ts": "999.0"}, BOT) == \
+        "before the desk go-live cutoff"
+    ctx = Ctx()
+    assert desk.ensure_desk_card(ctx, "CPROD", "999.0", {"customer": "Old Kids LLC"}) == ""
+    assert not ctx.web.named("chat_postMessage")
+    w = watch.Watcher(ctx, state_path=watch.STATE_PATH)
+    w.register("CPROD", "999.0", {"customer": "Old"})
+    assert watch.read_state()["threads"] == {}
+    with watch.state() as s:  # a stale record from before the cutoff existed
+        s["threads"]["CPROD:999.0"] = {"channel": "CPROD", "thread_ts": "999.0", "seen": [], "events": {}}
+    assert "CPROD:999.0" not in w.due(now=2000.0)
+    assert w.tick_thread("CPROD:999.0", force=True) == {"skipped": "before the desk go-live cutoff"}
+    assert not ctx.web.named("reactions_add")
+
+
+def test_backfill_never_reads_before_cutoff(monkeypatch, no_sleep):
+    monkeypatch.setenv("DAYCARE_DESK_SINCE", str(PARENT_TS))
+    ctx = Ctx()
+    ctx.web = SeqWeb(history=[{"messages": [{"ts": str(PARENT_TS + 10), "user": "UX", "text": "hi"}]}])
+    w = watch.Watcher(ctx, state_path=watch.STATE_PATH)
+    w.backfill("CPROD")
+    assert float(ctx.web.calls[0][1]["oldest"]) >= PARENT_TS
