@@ -239,6 +239,8 @@ if [ "$RESUME_SESSIONS" = "dm" ] || [ "$RESUME_SESSIONS" = "1" ]; then
         RESUME_REASON="skill_drift"
       elif [ "${STORED_FAILS:-0}" -ge 2 ] 2>/dev/null; then
         RESUME_REASON="poisoned"
+      elif [ ! -f "${HOME}/.claude/projects/${CLAUDE_WORKSPACE//\//-}/${STORED_UUID}.jsonl" ]; then
+        RESUME_REASON="transcript_missing"
       else
         CONTEXT_TOKENS=$(session_context_tokens "$STORED_UUID")
         if [ -n "$CONTEXT_TOKENS" ] && [ "$CONTEXT_TOKENS" -ge "$CONTEXT_CAP" ] 2>/dev/null; then
@@ -260,6 +262,13 @@ CONTEXT_BLOCK=""
 if [ "${CONTEXT_MODE:-}" != "shadow" ] && [ -s "$CONTEXT_FILE" ]; then
   CONTEXT_BLOCK=$(cat "$CONTEXT_FILE")
 fi
+# The daemon decides delta-vs-full context before the resume gate runs. When the
+# gate lands on a fresh session, a delta would hide the rest of the thread, so
+# drop it and let the prompt fetch the full thread instead.
+if [ "$RESUME_MODE" != "resume" ] && printf "%s" "$CONTEXT_BLOCK" | head -1 | grep -q "^_Delta since"; then
+  log "worker: fresh session got a delta context; full thread will be fetched"
+  CONTEXT_BLOCK=""
+fi
 
 # ─── Build prompt ─────────────────────────────────────────────────────────────
 if [ "$RESUME_MODE" = "resume" ]; then
@@ -271,7 +280,7 @@ You are continuing a prior session in this Slack thread. A new mention just arri
 - **New message ts:** $TS
 - **Posted by user:** $USER
 - **Thread ts:** $THREAD_TS
-- **Status file:** $STATUS_FILE — write \`success\`, \`failed\`, or \`clarification\` when done.
+- **Status file:** $STATUS_FILE — write \`success\`, \`failed\`, \`clarification\` or \`skipped\` when done.
 - **Turn number:** $TURN_COUNT
 
 ## Thread context
@@ -316,7 +325,7 @@ p = p.replace("{{STATUS_FILE}}", os.environ.get("STATUS_FILE", ""))
 p = p.replace("{{THREAD_CONTEXT}}", os.environ.get("CONTEXT_BLOCK", ""))
 p = p.replace("{{AUTHORIZED_USER_ID}}", os.environ.get("AUTHORIZED_USER_ID", ""))
 p = p.replace("{{EXTRA_AUTH_BLOCK}}", os.environ.get("EXTRA_AUTH_BLOCK", ""))
-p = p.replace("{{EXTRA_WRITE_USER_IDS}}", os.environ.get("EXTRA_WRITE_USER_IDS", ""))
+p = p.replace("{{EXTRA_WRITE_USER_IDS}}", "".join(", `" + u.strip() + "`" for u in os.environ.get("EXTRA_WRITE_USER_IDS", "").split(",") if u.strip()))
 p = p.replace("{{BOT_USER_ID}}", os.environ.get("BOT_USER_ID", ""))
 p = p.replace("{{BOT_NAME}}", os.environ.get("BOT_NAME", "ClaudeBot"))
 sys.stdout.write(p)
@@ -352,6 +361,7 @@ fire_final_emoji() {
   fi
   local emoji msg
   case "$status" in
+    skipped)        emoji="";                 msg="worker: skipped (follow-up needed no reply)" ;;
     clarification)  emoji="speech_balloon";   msg="worker: clarification posted" ;;
     success)        emoji="white_check_mark"; msg="worker: completed" ;;
     failed|failure) emoji="x";                msg="worker: failed" ;;
@@ -368,7 +378,9 @@ fire_final_emoji() {
   current=$(cat "$EMOJI_FILE" 2>/dev/null | tr -d '[:space:]')
   [ -z "$current" ] && current="eyes"
   slack_remove_reaction "$CH" "$TS" "$current" &
-  slack_add_reaction "$CH" "$TS" "$emoji" &
+  if [ -n "$emoji" ]; then
+    slack_add_reaction "$CH" "$TS" "$emoji" &
+  fi
   wait
   rm -f "$EMOJI_FILE"
   log "$msg"
@@ -494,7 +506,7 @@ if [ "$FEATURE_ON" = "1" ]; then
       if [ -z "$CURRENT_SKILL_HASH" ]; then
         CURRENT_SKILL_HASH=$(skill_hash)
       fi
-      if [ "$CLAUDE_EXIT" = "0" ] && { [ "$STATUS" = "success" ] || [ "$STATUS" = "clarification" ]; }; then
+      if [ "$CLAUDE_EXIT" = "0" ] && { [ "$STATUS" = "success" ] || [ "$STATUS" = "clarification" ] || [ "$STATUS" = "skipped" ]; }; then
         NEW_FAILS=0
       else
         NEW_FAILS=$(( CONSECUTIVE_FAILURES + 1 ))
