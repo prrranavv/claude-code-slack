@@ -219,6 +219,8 @@ def prefilter(evt: dict, bot_user_id: str) -> str:
         return "bot or system"
     if evt.get("channel_type") == "im":
         return "dm"
+    if is_parent(evt):
+        return "submission parent"
     text = (evt.get("text") or "").strip()
     if f"<@{bot_user_id}>" in text:
         return "mentions Loma"

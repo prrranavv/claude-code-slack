@@ -101,6 +101,7 @@ def evt(text, **kw):
     (evt("ok"), "acknowledgement"),
     (evt(":+1:"), "acknowledgement"),
     (evt("status"), "acknowledgement"),
+    (evt("a@b.co made the submission for: TEST X", user="U0BE1F85H0Q"), "submission parent"),
     (evt("eff date is 11/15, she has no field trips"), ""),
 ])
 def test_prefilter(e, reason):
