@@ -962,7 +962,7 @@ class Watcher:
             self._post_event_card(key, th, record, item)
         if changed or first:
             self._update_header(key)
-            self._set_reaction(th, st["status"])
+        self._set_reaction(th, st["status"])  # reconciles every tick; no-op when already right
         self.log(f"{key} tick: items={len(items)} new={len(new)} incoming={len(incoming)} "
                  f"cards={len(posted)} status={st['status']}{' (changed)' if changed else ''}"
                  f"{' err=' + analysis_error[:80] if analysis_error else ''}")
