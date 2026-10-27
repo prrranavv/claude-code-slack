@@ -622,10 +622,13 @@ def claude_local(prompt: str, model: str, timeout: int) -> tuple[int, str]:
     cwd = os.path.join(INSTALL_DIR, "triage")
     os.makedirs(cwd, exist_ok=True)
     with LOCAL_SLOTS:
+        # --tools "": with tools available, a one-turn call that reaches for one exits 1 with no reply.
         proc = subprocess.run([claude_bin(), "-p", prompt, "--model", model, "--max-turns", "1",
-                               "--strict-mcp-config", "--output-format", "text"],
+                               "--strict-mcp-config", "--tools", "", "--output-format", "text"],
                               capture_output=True, text=True, timeout=timeout, env=env, cwd=cwd,
                               stdin=subprocess.DEVNULL)  # claude -p appends stdin to the prompt
+    if proc.returncode:
+        return proc.returncode, (proc.stdout or "") + "\n[stderr] " + (proc.stderr or "")[-300:]
     return proc.returncode, proc.stdout or ""
 
 
@@ -649,7 +652,8 @@ def run_local(prompt: str) -> dict:
     try:
         payload = extract_json(out)
     except ValueError:
-        return {"ok": False, "error": f"local analysis returned no JSON (exit {code})"}
+        tail = out.split("[stderr] ", 1)[1].strip()[-160:] if "[stderr] " in out else ""
+        return {"ok": False, "error": f"local analysis returned no JSON (exit {code})" + (f": {tail}" if tail else "")}
     return {"ok": isinstance(payload.get("events"), list), "payload": payload, "lane": "local"}
 
 

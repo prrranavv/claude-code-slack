@@ -4,7 +4,7 @@
 Usage: python3 slack-api.py <subcommand> [options]
 Requires: SLACK_BOT_TOKEN env var
 
-Subcommands: post, history, replies, search, user, channels, react, files, delete, update
+Subcommands: post, history, replies, search, user, channels, react, files, upload, delete, update
 """
 
 import argparse
@@ -275,6 +275,34 @@ def cmd_files(args):
     print(json.dumps(output, indent=2))
 
 
+def cmd_upload(args):
+    """Upload a local file into a channel/thread (files.getUploadURLExternal flow)."""
+    path = os.path.abspath(args.file)
+    if not os.path.isfile(path):
+        _fail(f"File not found: {path}")
+    size = os.path.getsize(path)
+    name = args.filename or os.path.basename(path)
+    ticket = _api_call("files.getUploadURLExternal", {"filename": name, "length": size})
+    with open(path, "rb") as f:
+        data = f.read()
+    req = urllib.request.Request(ticket["upload_url"], data=data,
+                                 headers={"Content-Type": "application/octet-stream"})
+    try:
+        urllib.request.urlopen(req, timeout=120)
+    except urllib.error.URLError as e:
+        _fail(f"Upload failed: {e}")
+    params = {"files": [{"id": ticket["file_id"], "title": args.title or name}],
+              "channel_id": args.channel}
+    if args.thread_ts:
+        params["thread_ts"] = args.thread_ts
+    if args.comment:
+        params["initial_comment"] = args.comment
+    result = _api_call("files.completeUploadExternal", params, is_post=True)
+    files = result.get("files") or [{}]
+    print(json.dumps({"ok": True, "file_id": ticket["file_id"],
+                      "permalink": files[0].get("permalink", "")}, indent=2))
+
+
 def cmd_delete(args):
     result = _api_call("chat.delete", {"channel": args.channel, "ts": args.ts}, is_post=True)
     print(json.dumps({"ok": True, "ts": result.get("ts"), "channel": result.get("channel")}, indent=2))
@@ -341,6 +369,14 @@ def main():
     p.add_argument("--out", required=True)
     p.add_argument("--max-bytes", type=int, default=25 * 1024 * 1024)
 
+    p = sub.add_parser("upload", help="Upload a local file to a channel/thread")
+    p.add_argument("--channel", required=True)
+    p.add_argument("--file", required=True)
+    p.add_argument("--thread-ts")
+    p.add_argument("--title")
+    p.add_argument("--filename")
+    p.add_argument("--comment")
+
     p = sub.add_parser("delete", help="Delete a message")
     p.add_argument("--channel", required=True)
     p.add_argument("--ts", required=True)
@@ -355,7 +391,7 @@ def main():
     commands = {
         "post": cmd_post, "history": cmd_history, "replies": cmd_replies,
         "search": cmd_search, "user": cmd_user, "channels": cmd_channels,
-        "react": cmd_react, "files": cmd_files, "delete": cmd_delete, "update": cmd_update,
+        "react": cmd_react, "files": cmd_files, "upload": cmd_upload, "delete": cmd_delete, "update": cmd_update,
     }
     try:
         commands[args.command](args)
