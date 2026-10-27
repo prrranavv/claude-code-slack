@@ -425,8 +425,13 @@ def last_out_epoch(items: list[dict], who: str, info: dict, desks: dict, org: st
 
 
 def derive_status(th: dict, items: list[dict], desks: dict) -> dict:
-    """Header facts: status color, desks sent/quoted/declined, next action. Pure code."""
+    """Header facts: status color, desks sent/quoted/declined, next action. Pure code.
+
+    Zero evidence (no lead linked AND no team@ mail found) is "unknown", never red.
+    """
     info = th.get("info") or {}
+    if not items and not th.get("won") and not (th.get("lead") or {}).get("id") and not info.get("lead_id"):
+        return {"status": "unknown", "sent": [], "quoted": [], "declined": [], "next": ""}
     since = float(th.get("thread_ts") or 0) - 3 * 86400
     sent = sent_desks(items, desks, since)
     for d in th.get("manual_sent") or []:
@@ -487,6 +492,8 @@ def next_action(th, items, desks, status, sent, quoted, declined) -> str:
 
 def header_line(st: dict) -> str:
     s = st["status"]
+    if s == "unknown":
+        return ":grey_question: No lead linked — status unknown"
     if s == "won":
         return f"{STATUS_EMOJI['won']} Won"
     if s == "red":
@@ -516,9 +523,96 @@ def won_in_slack(customer: str, since_epoch: float) -> bool:
         except Exception:
             continue
         hits = hits if isinstance(hits, list) else (hits.get("messages") or hits.get("matches") or [])
-        if any(core.lower() in (h.get("text") or "").lower() for h in hits if isinstance(h, dict)):
+        # The quoted phrase search is the match. Rich win posts carry their words in blocks, so
+        # `text` comes back empty; a non-empty text must still name the customer.
+        if any(not (h.get("text") or "").strip() or core.lower() in (h.get("text") or "").lower()
+               for h in hits if isinstance(h, dict)):
             return True
     return False
+
+
+# ── evidence beyond the lead: lead resolution + team@ Gmail ───────────────────
+
+LEAD_CHAT_FIND_FIELDS = ("contact_email", "contact_phone", "legal_name")
+
+
+def lead_find(query: str) -> list[dict]:
+    try:
+        proc = subprocess.run([LEAD_CHAT, "find", query], capture_output=True, text=True, timeout=60, env=RUN_ENV)
+        out = json.loads(proc.stdout or "[]")
+    except Exception:
+        return []
+    return out if isinstance(out, list) else (out.get("candidates") or out.get("matches") or [])
+
+
+def resolve_lead(info: dict, find=lead_find) -> tuple[str, str]:
+    """Hub lead_id is NULL on some intakes: try contact email, phone, exact legal name.
+    Only a unique match is accepted. → (lead_id, how) or ("", "")."""
+    names = {norm_name(info.get("legal_name") or ""), norm_name(info.get("customer") or "")} - {""}
+    for field in LEAD_CHAT_FIND_FIELDS:
+        q = (info.get(field) or (info.get("customer") if field == "legal_name" else "") or "").strip()
+        if not q:
+            continue
+        hits = find(q)
+        if len(hits) != 1 or int(hits[0].get("total_matches") or 1) != 1 or not hits[0].get("id"):
+            continue
+        if field == "legal_name" and norm_name(hits[0].get("business_name") or "") not in names:
+            continue  # name search must be exact, not fuzzy
+        return hits[0]["id"], field
+    return "", ""
+
+
+def norm_name(text: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split())
+
+
+def _rfc_to_iso(value: str) -> str:
+    from email.utils import parsedate_to_datetime
+    try:
+        return parsedate_to_datetime(value).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def gmail_cli(*args: str) -> dict:
+    gmail_ts = os.path.join(WORK_ROOT, ".agents/skills/gmail/scripts/gmail.ts")
+    proc = subprocess.run(["bun", gmail_ts, *args, "--as", "team@somainsure.com"], capture_output=True, text=True,
+                          timeout=120, env=RUN_ENV, cwd="/tmp")
+    return json.loads(proc.stdout or "{}")
+
+
+def gmail_items(customer: str, since_epoch: float, cli=gmail_cli) -> list[dict] | None:
+    """team@ messages naming the customer (wholesaler mail isn't always linked to the lead).
+    None = the search failed (unknown), [] = searched, nothing found."""
+    core = core_name(customer)
+    if len(core) < 6:
+        return []
+    days = max(1, int((time.time() - since_epoch) / 86400) + 4)
+    try:
+        out = cli("list", f'"{core}" newer_than:{days}d', "--max", "50")
+    except Exception:  # noqa: BLE001
+        return None
+    if not out.get("ok"):
+        return None
+    rows = out.get("data") if isinstance(out.get("data"), list) else ((out.get("data") or {}).get("messages") or [])
+    items = []
+    for r in rows:
+        frm = (re.findall(r"[\w.+-]+@[\w.-]+", r.get("from") or "") or [""])[0].lower()
+        labels = r.get("labelIds")
+        if isinstance(labels, str):
+            labels = re.findall(r"[A-Z_]+", labels)
+        items.append({"id": "gm-" + r["id"], "message_id": r["id"], "at": _rfc_to_iso(r.get("date") or ""),
+                      "type": "email", "from": frm, "to": [a.lower() for a in re.findall(r"[\w.+-]+@[\w.-]+", r.get("to") or "")],
+                      "direction": "out" if frm.endswith(SOMA_DOMAIN) else "in", "subject": r.get("subject") or "",
+                      "text": r.get("snippet") or "", "thread_id": r.get("threadId") or "", "labels": labels or [],
+                      "attachments": [], "source": "gmail"})
+    return [i for i in items if i["at"]]
+
+
+def merge_evidence(lead_items: list[dict], mail: list[dict]) -> list[dict]:
+    """Lead-linked emails win; a Gmail message already linked to the lead is dropped."""
+    linked = {i.get("message_id") for i in lead_items if i.get("message_id")}
+    return lead_items + [m for m in mail if m["message_id"] not in linked]
 
 
 # ── analysis on the Angie pool ────────────────────────────────────────────────
@@ -702,6 +796,9 @@ class Watcher:
         self._busy_lock = threading.Lock()
         self.fetch = fetch_timeline
         self.pool = run_analysis
+        self.resolve_lead = resolve_lead
+        self.gmail = gmail_items
+        self.gmail_read = lambda mid: (gmail_cli("read", mid).get("data") or {}).get("body", "")
         self.wins = won_in_slack
 
     def log(self, msg: str) -> None:
@@ -756,13 +853,39 @@ class Watcher:
             with self._busy_lock:
                 self._busy.discard(key)
 
+    def _lead_id(self, th: dict) -> str:
+        info = th.get("info") or {}
+        if info.get("lead_id"):
+            return info["lead_id"]
+        lead = th.get("lead") or {}
+        if lead.get("id"):
+            return lead["id"]
+        lead_id, how = self.resolve_lead(info)
+        th["lead"] = {"id": lead_id or None, "via": how, "checked": time.time()}
+        if lead_id:
+            th["_fresh_evidence"] = True  # its history must not read as new mail
+            self.log(f"{thread_key(th['channel'], th['thread_ts'])} lead resolved via {how}: {lead_id}")
+        return lead_id
+
     def _items(self, th: dict) -> list[dict]:
         info = th.get("info") or {}
-        lead_id = info.get("lead_id")
+        lead_id = self._lead_id(th)
         items = []
         if lead_id:
             timeline, objects = self.fetch(lead_id)
             items = [n for n in (normalize(r, objects) for r in timeline) if n]
+        if not is_test_channel(th.get("channel", "")):
+            mail = self.gmail(info.get("legal_name") or info.get("customer", ""), float(th["thread_ts"]))
+            th["gmail_ok"] = mail is not None
+            items = merge_evidence(items, mail or [])
+            seen = set(th.get("seen") or [])
+            for i in items:  # full body only for new incoming mail the lead doesn't carry
+                if i.get("source") == "gmail" and i["direction"] == "in" and i["id"] not in seen:
+                    try:
+                        body = self.gmail_read(i["message_id"])
+                        i["text"] = body or i["text"]
+                    except Exception:  # noqa: BLE001
+                        pass
         if self.fixture_path and is_test_channel(th.get("channel", "")) and os.path.exists(self.fixture_path):
             with open(self.fixture_path) as f:
                 fx = [json.loads(line) for line in f if line.strip()]
@@ -779,15 +902,22 @@ class Watcher:
         items = self._items(th)
         parties = {i["id"]: party(i, th.get("info") or {}, self.desks) for i in items}
         first = not th.get("baselined")
-        if first:
-            # History before the submission never produces cards. A backfilled thread
-            # (registered after the fact) is classified silently once so the header is right.
-            baseline(items, th, float(th["thread_ts"]) if not th.get("backfill") else now + 1)
-        new = split_new(items, th)
-        if th.get("backfill") and first:
-            new = [i for i in items if iso_to_epoch(i["at"]) >= float(th["thread_ts"]) - 3 * 86400]
+        # A source seen for the first time (lead just resolved, or team@ mail added to an existing
+        # thread) brings history, not news: classify it once for the header, post no cards.
+        fresh = bool(th.pop("_fresh_evidence", False)) or (
+            not first and not th.get("gmail_baselined") and any(i.get("source") == "gmail" for i in items))
+        window = float(th["thread_ts"]) - 3 * 86400
+        if first and not th.get("backfill"):
+            baseline(items, th, float(th["thread_ts"]))  # history before the submission never produces cards
+        if (th.get("backfill") and first) or fresh:
+            seen = set(th.get("seen") or [])
+            new = [i for i in items if i["id"] not in seen and iso_to_epoch(i["at"]) >= window]
+            mark_seen(th, [i["id"] for i in items if i["id"] not in seen and iso_to_epoch(i["at"]) < window])
+        else:
+            new = split_new(items, th)
+        silent = (th.get("backfill") and first) or fresh
         incoming = [i for i in new if i["direction"] == "in" and parties[i["id"]] in ("wholesaler", "customer", "markel")]
-        post_cards = age <= WATCH_CARD_HOURS * 3600 and not (th.get("backfill") and first)
+        post_cards = age <= WATCH_CARD_HOURS * 3600 and not silent
         posted, analysis_error = [], ""
         if incoming:
             context = [i for i in items if i["direction"] == "out"][-6:]
@@ -809,6 +939,8 @@ class Watcher:
             else:
                 analysis_error = res.get("error", "pool failed")
                 th["analysis_failures"] = int(th.get("analysis_failures") or 0) + 1
+                if silent:
+                    th["_fresh_evidence"] = True  # the retry stays a silent history pass
                 # Outbound-only items still advance; incoming retry next tick (3 strikes).
                 retry = {i["id"] for i in incoming} if th["analysis_failures"] < 3 else set()
                 mark_seen(th, [i["id"] for i in new if i["id"] not in retry])
@@ -816,6 +948,8 @@ class Watcher:
         else:
             mark_seen(th, [i["id"] for i in new])
         th["baselined"] = True
+        if th.get("gmail_ok"):
+            th["gmail_baselined"] = True
         if not th.get("won") and (force or now - float(th.get("wins_checked") or 0) > 3000):
             th["won"] = bool(self.wins((th.get("info") or {}).get("customer", ""), float(th["thread_ts"])))
             th["wins_checked"] = now
@@ -905,7 +1039,7 @@ class Watcher:
         """Exactly one Loma-owned status reaction on the submission parent."""
         target = STATUS_REACTIONS.get(status)
         if not target or th.get("reaction") == target:
-            return
+            return  # "unknown" has no reaction: whatever is there stays untouched
         for name in STATUS_REACTIONS.values():
             if name == target:
                 continue

@@ -275,8 +275,8 @@ def test_verbatim_rejects_model_math():
 
 def test_derive_status_precedence():
     d = _desks()
-    th = {"thread_ts": str(PARENT_TS), "info": {}, "events": {}}
-    assert watch.derive_status(th, [], d)["status"] == "red"
+    th = {"thread_ts": str(PARENT_TS), "info": {"lead_id": "L1"}, "events": {}}
+    assert watch.derive_status(th, [], d)["status"] == "red"  # lead linked, nothing sent
     assert watch.derive_status(th, [], d)["next"] == "send the submission"
     th["events"] = {"i9": {"kind": "decline", "desk": "Jake (RT)", "at": iso(4)}}
     st = watch.derive_status(th, [SENT_JAKE], d)
@@ -657,3 +657,87 @@ def test_legacy_run_card_fails_closed(no_sleep, monkeypatch):
     ctx.web = SeqWeb()
     actions._post_run_card(ctx, "CPROD", "9.0")
     assert not ctx.web.named("chat_postMessage") and len(timers) == 1
+
+
+
+# ── null Hub lead_id / zero evidence (never red) ──────────────────────────────
+
+def test_resolve_lead_order_and_unique_only():
+    calls = []
+
+    def find(q):
+        calls.append(q)
+        return {"a@x.com": [{"id": "L1", "total_matches": 2}, {"id": "L2"}],
+                "5551234567": [{"id": "L3", "business_name": "Acme Kids LLC", "total_matches": 1}]}.get(q, [])
+    info = {"contact_email": "a@x.com", "contact_phone": "5551234567", "legal_name": "Acme Kids LLC"}
+    assert watch.resolve_lead(info, find=find) == ("L3", "contact_phone") and calls == ["a@x.com", "5551234567"]
+    # name search must be an exact business name, not a fuzzy hit
+    fuzzy = lambda q: [{"id": "L9", "business_name": "Acme Kids Academy", "total_matches": 1}]
+    assert watch.resolve_lead({"legal_name": "Acme Kids LLC"}, find=fuzzy) == ("", "")
+    exact = lambda q: [{"id": "L9", "business_name": "ACME Kids, LLC", "total_matches": 1}]
+    assert watch.resolve_lead({"legal_name": "Acme Kids LLC"}, find=exact) == ("L9", "legal_name")
+
+
+def test_zero_evidence_is_unknown_and_reaction_untouched(monkeypatch):
+    monkeypatch.setattr(time, "time", lambda: PARENT_TS + 2 * 3600)
+    ctx = Ctx()
+    w = make_watcher(ctx, [], lambda: [])
+    w._items = watch.Watcher._items.__get__(w)
+    w.resolve_lead = lambda info: ("", "")
+    w.gmail = lambda c, t: []
+    w.register("CPROD", str(PARENT_TS), {"customer": "Scheving Enterprises LLC"}, card_ts="201.0")
+    res = w.tick_thread(f"CPROD:{PARENT_TS}")
+    assert res["status"]["status"] == "unknown"
+    assert not ctx.web.named("reactions_add") and not ctx.web.named("reactions_remove")
+    assert "No lead linked" in watch.header_line(res["status"])
+    assert "No lead linked" in json.dumps(ctx.web.named("chat_update")[-1]["blocks"])
+
+
+def test_null_hub_lead_resolves_and_history_is_silent(monkeypatch):
+    monkeypatch.setattr(time, "time", lambda: PARENT_TS + 5 * 3600)
+    ctx = Ctx()
+    w = make_watcher(ctx, [], lambda: [{"interaction_id": "i3", "kind": "quote", "material": True, "summary": "q",
+                                        "carrier": "Kinsale Insurance Company", "premium_all_in": "$6,590.82",
+                                        "reply_channel": "none", "reply_body": ""}])
+    w._items = watch.Watcher._items.__get__(w)
+    w.gmail = lambda c, t: []
+    found = {"n": 0}
+
+    def resolve(info):
+        found["n"] += 1
+        return ("", "") if found["n"] == 1 else ("L7", "contact_email")
+    w.resolve_lead = resolve
+    w.fetch = lambda lead: ([], {})
+    key = f"CPROD:{PARENT_TS}"
+    w.register("CPROD", str(PARENT_TS), {"customer": "New Age Academy, LLC"}, card_ts="201.0")
+    assert w.tick_thread(key)["status"]["status"] == "unknown"
+    monkeypatch.setattr(watch, "normalize", lambda r, o: r)  # fetch now returns ready items
+    w.fetch = lambda lead: ([SENT_JAKE, JAKE_QUOTE], {})
+    res = w.tick_thread(key, force=True)
+    assert res["status"]["status"] == "green" and res["cards"] == 0  # history: classified, not carded
+    th = watch.read_state()["threads"][key]
+    assert th["lead"]["id"] == "L7" and ctx.web.named("reactions_add")[-1]["name"] == "large_green_circle"
+
+
+def test_gmail_items_and_merge(monkeypatch):
+    rows = [{"id": "g1", "threadId": "t1", "from": "Soma <team@somainsure.com>", "to": "lr@hedgespecialty.com",
+             "subject": "Re: Acme Kids LLC – Submission", "date": "Mon, 26 Oct 2026 14:39:16 -0700",
+             "snippet": "Hi Luke", "labelIds": "['SENT']"},
+            {"id": "g2", "threadId": "t1", "from": "Luke <lr@hedgespecialty.com>", "to": "team@somainsure.com",
+             "subject": "Re: Acme", "date": "Mon, 26 Oct 2026 15:00:00 -0700", "snippet": "quote", "labelIds": "['INBOX']"}]
+    mail = watch.gmail_items("Acme Kids LLC", PARENT_TS, cli=lambda *a: {"ok": True, "data": rows})
+    assert [m["direction"] for m in mail] == ["out", "in"] and mail[0]["labels"] == ["SENT"]
+    assert mail[0]["at"] == "2026-10-26T21:39:16.000Z"
+    assert watch.sent_desks(mail, _desks(), 0) == ["Hedge"]
+    lead = [dict(SENT_JAKE, message_id="g1")]
+    assert [m["id"] for m in watch.merge_evidence(lead, mail)] == ["i1", "gm-g2"]
+    assert watch.gmail_items("Acme Kids LLC", PARENT_TS, cli=lambda *a: {"ok": False}) is None
+
+
+def test_wins_counts_block_only_posts(monkeypatch):
+    class P:
+        stdout = json.dumps([{"text": "", "channel": "all-wins"}])
+    monkeypatch.setattr(watch.subprocess, "run", lambda *a, **k: P())
+    assert watch.won_in_slack("Scheving Enterprises LLC", PARENT_TS) is True
+    P.stdout = json.dumps([{"text": "Closed Brightstar DPS today"}])
+    assert watch.won_in_slack("Scheving Enterprises LLC", PARENT_TS) is False
