@@ -26,6 +26,11 @@ from slack_sdk.socket_mode import SocketModeClient
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import daycare_actions  # noqa: E402
+import daycare_desk  # noqa: E402
+import daycare_watch  # noqa: E402
+
 
 # ─── Config loading ────────────────────────────────────────────────────────────
 
@@ -274,6 +279,10 @@ def spawn_worker(channel: str, ts: str, user: str, thread_ts: str,
                  mention_text: str = "", fast: bool = False) -> None:
     effective_model = resolve_effective_model(thread_ts, user, model)
     env = {**os.environ, "MODEL": effective_model}
+    if user and user != AUTHORIZED_USER and is_writer(user):
+        extra = [u for u in env.get("EXTRA_WRITE_USER_IDS", "").split(",") if u.strip()]
+        if user not in extra:
+            env["EXTRA_WRITE_USER_IDS"] = ",".join(extra + [user])
     env["THREAD_TS"] = thread_ts
     env["IS_DM"] = "1" if is_dm else "0"
     env["CLAUDE_SLACK_INSTALL_DIR"] = INSTALL_DIR
@@ -396,6 +405,37 @@ def _worker_permalink(channel: str, worker_ts: str) -> str:
 
 
 # ─── Thread context pre-fetch ─────────────────────────────────────────────────
+
+# ─── Write access: every full Soma member (Pranav 2026-10-23) ─────────────────
+# Guests, Slack Connect users, bots and deactivated accounts stay read-only.
+SOMA_TEAM_ID = os.environ.get("SOMA_TEAM_ID", "T099T19H8RW")
+_member_cache: dict = {}
+_member_cache_lock = threading.Lock()
+
+
+def is_writer(user_id: str) -> bool:
+    if not user_id:
+        return False
+    if user_id == AUTHORIZED_USER or user_id in {
+            u.strip() for u in os.environ.get("EXTRA_WRITE_USER_IDS", "").split(",") if u.strip()}:
+        return True
+    with _member_cache_lock:
+        hit = _member_cache.get(user_id)
+    if hit and time.time() - hit[1] < 3600:
+        return hit[0]
+    ok = False
+    try:
+        u = web.users_info(user=user_id).data.get("user") or {}
+        ok = (not u.get("is_bot") and not u.get("deleted")
+              and not u.get("is_restricted") and not u.get("is_ultra_restricted")
+              and not u.get("is_stranger")
+              and u.get("team_id") == SOMA_TEAM_ID)
+    except Exception as e:
+        log.info(f"is_writer lookup failed for {user_id}: {e}")
+    with _member_cache_lock:
+        _member_cache[user_id] = (ok, time.time())
+    return ok
+
 
 def resolve_user_display_name(user_id: str) -> str:
     if not user_id:
@@ -805,11 +845,11 @@ def do_stop(channel: str, thread_ts: str, trigger_ts: str, trigger_kind: str) ->
 
 
 def handle_stop_mention(channel: str, ts: str, user: str, thread_ts: str) -> None:
-    if user != AUTHORIZED_USER:
+    if not is_writer(user):
         log.info(f"STOP MENTION REJECTED (user={user}): {channel}/{ts}")
         try:
             web.chat_postMessage(channel=channel, thread_ts=thread_ts,
-                                 text="_Only the authorized user can stop sessions._")
+                                 text="_Only Soma members can stop sessions._")
             web.reactions_add(channel=channel, timestamp=ts, name="no_entry")
         except SlackApiError:
             pass
@@ -826,7 +866,7 @@ def handle_stop_mention(channel: str, ts: str, user: str, thread_ts: str) -> Non
 
 
 def handle_delete_thread(channel: str, ts: str, user: str, thread_ts: str) -> None:
-    if user != AUTHORIZED_USER:
+    if not is_writer(user):
         log.info(f"DELETE REJECTED (user={user}): {channel}/{ts}")
         return
     deleted = 0
@@ -887,7 +927,7 @@ def handle_reaction_added(evt: dict) -> None:
     if reaction not in STOP_REACTIONS:
         return
     user = evt.get("user", "")
-    if user != AUTHORIZED_USER:
+    if not is_writer(user):
         return
     item = evt.get("item") or {}
     if item.get("type") != "message":
@@ -904,6 +944,59 @@ def handle_reaction_added(evt: dict) -> None:
     thread_ts = resolve_thread_ts(channel, item_ts)
     killed = do_stop(channel, thread_ts, item_ts, trigger_kind="reaction")
     log.info(f"STOP REACTION (:{reaction}:): {channel}/{item_ts} by {user} — killed {killed}")
+
+
+def handle_uptime_button(payload: dict) -> None:
+    """#uptime report buttons: forward one agent's hourly report to them by DM.
+
+    The button value carries everything needed ({to, agent, text}), so no
+    recompute happens here. Owner-only.
+    """
+    def respond(text: str) -> None:
+        response_url = payload.get("response_url", "")
+        if not response_url:
+            return
+        body = json.dumps({"text": text, "response_type": "ephemeral",
+                           "replace_original": False}).encode()
+        req = urllib.request.Request(
+            response_url, data=body, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10)
+
+    try:
+        actions = payload.get("actions") or []
+        if not actions:
+            return
+        action = actions[0]
+        if not str(action.get("action_id", "")).startswith("uptime_fwd"):
+            return
+        clicker = (payload.get("user") or {}).get("id", "")
+        if clicker != AUTHORIZED_USER:
+            respond("Only the owner can forward uptime reports.")
+            return
+        value = json.loads(action.get("value") or "{}")
+        to_user, agent, text = value.get("to"), value.get("agent", "?"), value.get("text")
+        if not to_user or not text:
+            respond("Malformed report payload — nothing sent.")
+            return
+        key = ("uptime_fwd",
+               (payload.get("container") or {}).get("message_ts", ""),
+               action.get("action_id", ""))
+        with seen_lock:
+            if key in seen_keys:
+                respond(f"{agent}'s report was already sent.")
+                return
+            seen_keys.add(key)
+        web.chat_postMessage(channel=to_user, text=text)
+        respond(f"Sent {agent}'s report to them.")
+        log.info(f"UPTIME FORWARD: {agent} ({to_user}) by {clicker}")
+    except SlackApiError as e:
+        log.info(f"uptime forward failed: {e.response.get('error')}")
+        try:
+            respond(f"Couldn't send: {e.response.get('error')}")
+        except Exception:
+            pass
+    except Exception as e:
+        log.info(f"uptime forward error: {e}")
 
 
 def forward_thread_start(channel: str, ts: str, user: str, text: str, is_dm: bool) -> None:
@@ -938,6 +1031,28 @@ def forward_thread_start(channel: str, ts: str, user: str, text: str, is_dm: boo
 
 
 # ─── Dispatch ─────────────────────────────────────────────────────────────────
+
+def is_followed_thread_reply(evt: dict) -> bool:
+    """A plain reply in a channel thread Loma is already working in.
+
+    Once someone starts a thread with Loma, their later replies reach it without
+    an @mention; the worker decides whether a reply is needed. Only the thread's
+    session owner is followed, and a message addressed to someone else is not.
+    """
+    ts, thread_ts = evt.get("ts") or "", evt.get("thread_ts") or ""
+    if not thread_ts or thread_ts == ts or evt.get("bot_id") or evt.get("subtype"):
+        return False
+    text = evt.get("text") or ""
+    if f"<@{BOT_USER_ID}>" in text:
+        return False  # the app_mention event carries it
+    if re.search(r"<@U[A-Z0-9]+>", text):
+        return False  # addressed to a person
+    sess = read_thread_session(thread_ts)
+    if not sess or sess.get("first_user_id") != evt.get("user"):
+        return False
+    log.info(f"FOLLOW-UP: {evt.get('channel')}/{ts} in followed thread {thread_ts}")
+    return True
+
 
 def should_process(evt: dict) -> bool:
     if evt.get("user") == BOT_USER_ID or evt.get("bot_id"):
@@ -995,22 +1110,77 @@ def backlog_drainer() -> None:
             dispatch(channel, ts, user, text_preview, thread_ts, model, is_dm, mention_text, fast)
 
 
+class _Writers:
+    """`user in writers` → is_writer(): every full Soma member (2026-10-23 rule)."""
+
+    def __contains__(self, user_id) -> bool:
+        return is_writer(user_id)
+
+
+def _daycare_ctx():
+    return daycare_actions.Ctx(web, log, dispatch, _Writers(), BOT_USER_ID)
+
+
+def _poke_watcher(evt: dict) -> None:
+    """Angie's "Quote landed" / Loma's "Submission sent" in a watched thread → tick it now."""
+    channel, thread_ts = evt.get("channel", ""), evt.get("thread_ts") or ""
+    if not thread_ts or thread_ts == evt.get("ts") or not daycare_watch.is_desk_channel(channel):
+        return
+    text = evt.get("text") or ""
+    if ("Quote landed for" in text and evt.get("user") in daycare_desk.ANGIE_USER_IDS) or \
+            (text.startswith("Submission sent to") and evt.get("user") == BOT_USER_ID):
+        w = daycare_watch.get(_daycare_ctx())
+        if w:
+            w.poke(channel, thread_ts)
+
+
 def on_request(client: SocketModeClient, req: SocketModeRequest) -> None:
     try:
         client.send_socket_mode_response(SocketModeResponse(envelope_id=req.envelope_id))
     except Exception as e:
         log.info(f"ack failed: {e}")
 
+    if req.type == "interactive":
+        payload = req.payload or {}
+        try:
+            if payload.get("type") == "block_actions":
+                ctx = _daycare_ctx()
+                if not (daycare_desk.handle_block_action(ctx, payload)
+                        or daycare_actions.handle_block_action(ctx, payload)):
+                    handle_uptime_button(payload)
+            elif payload.get("type") == "view_submission":
+                ctx = _daycare_ctx()
+                if not daycare_desk.handle_view_submission(ctx, payload):
+                    daycare_actions.handle_view_submission(ctx, payload)
+        except Exception as e:
+            log.info(f"interactive handler error: {type(e).__name__}: {e}")
+        return
+
     if req.type != "events_api":
         return
 
     evt = (req.payload or {}).get("event") or {}
     etype = evt.get("type")
+    if os.environ.get("LOMA_EVENT_DEBUG") == "1" or os.path.exists(os.path.join(INSTALL_DIR, ".event-debug")):
+        log.info(f"EVENT-DEBUG type={etype} channel_type={evt.get('channel_type')} subtype={evt.get('subtype')} "
+                 f"thread={'y' if evt.get('thread_ts') else 'n'} bot={'y' if evt.get('bot_id') else 'n'}")
+
+    if etype == "message":
+        try:
+            daycare_actions.post_run_buttons(_daycare_ctx(), evt)
+            daycare_desk.on_parent(_daycare_ctx(), evt)
+            _poke_watcher(evt)
+        except Exception as e:
+            log.info(f"run-buttons hook error: {type(e).__name__}: {e}")
 
     if etype == "app_mention":
         pass
     elif etype == "message":
-        if evt.get("channel_type") != "im":
+        if evt.get("channel_type") != "im" and not is_followed_thread_reply(evt):
+            # #daycare-submission desk: every untagged human message is triaged
+            # (deterministic filters, then haiku); only relevant ones spawn a worker.
+            if daycare_watch.is_desk_channel(evt.get("channel", "")):
+                daycare_desk.triage_async(_daycare_ctx(), evt)
             return
     elif etype == "reaction_added":
         handle_reaction_added(evt)
@@ -1100,6 +1270,9 @@ def main() -> None:
 
     t = threading.Thread(target=backlog_drainer, daemon=True)
     t.start()
+    if os.environ.get("DAYCARE_WATCH", "1") == "1":
+        daycare_watch.start(_daycare_ctx())
+        log.info(f"    daycare desk channels={sorted(daycare_watch.desk_channels())}")
 
     client.connect()
     log.info("=== socket daemon connected ===")
