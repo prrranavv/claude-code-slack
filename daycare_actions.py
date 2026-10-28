@@ -152,6 +152,9 @@ def handle_block_action(ctx: Ctx, payload: dict) -> bool:
         if _strip_buttons(ctx, payload, channel):
             threading.Thread(target=_ask, args=(ctx, payload, manifest, vias, clicker, channel, thread_ts),
                              daemon=True).start()
+    elif aid.startswith("dcs_discard:"):
+        threading.Thread(target=_discard, args=(ctx, payload, manifest, aid.split(":", 1)[1], clicker, channel, thread_ts),
+                         daemon=True).start()
     elif aid == "dcs_ask_edit":
         _open_editor(ctx, payload, manifest, "ask", channel, thread_ts)
     elif aid.startswith("dcs_edit:"):
@@ -222,10 +225,6 @@ def _send(ctx, payload, manifest, broker, clicker, channel, thread_ts):
             bad = [r for r in res.get("results") or [] if not r.get("ok")]
             names = {d.get("broker"): d.get("name") or d.get("broker")
                      for d in (_safe_manifest(manifest).get("drafts") or [])}
-            if sent:
-                ctx.web.chat_postMessage(channel=channel, thread_ts=thread_ts,
-                                         text="Submission sent to " + ", ".join(names.get(r["broker"], r["broker"]) for r in sent)
-                                         + f". Approved by <@{clicker}>.")
             if bad or not res.get("results"):
                 _restore(manifest)
                 msg = "; ".join(f"{names.get(r['broker'], r['broker'])}: {r.get('error')}" for r in bad) or res.get("error", "nothing sent")
@@ -235,6 +234,13 @@ def _send(ctx, payload, manifest, broker, clicker, channel, thread_ts):
             ctx.log.info(f"DAYCARE SEND error: {e}")
             _restore(manifest)
             _tell(ctx, payload, clicker, channel, thread_ts, f"Send failed: {e}")
+
+
+def _discard(ctx, payload, manifest, target, clicker, channel, thread_ts):
+    res = _ui("discard", "--manifest", manifest, "--target", target, "--user", clicker)
+    if not res.get("ok"):
+        _tell(ctx, payload, clicker, channel, thread_ts, f"Not discarded — {res.get('error', 'failed')}")
+    ctx.log.info(f"DAYCARE DISCARD {target} {manifest} by {clicker}: {'ok' if res.get('ok') else res.get('error')}")
 
 
 def _ask(ctx, payload, manifest, vias, clicker, channel, thread_ts, text=None):
@@ -250,9 +256,9 @@ def _ask(ctx, payload, manifest, vias, clicker, channel, thread_ts, text=None):
                 done.append(("Emailed" if via == "email" else "Texted") + (f" ⚠️ {res['warning']}" if res.get("warning") else ""))
             else:
                 errors.append(f"{'email' if via == 'email' else 'text'}: {res.get('error', 'failed')}")
-        if done:
-            ctx.web.chat_postMessage(channel=channel, thread_ts=thread_ts,
-                                     text=f"{' and '.join(done)} the customer. Approved by <@{clicker}>.")
+        warnings = [d for d in done if "⚠️" in d]
+        if warnings:
+            _tell(ctx, payload, clicker, channel, thread_ts, "; ".join(warnings))
         if errors:
             _restore(manifest)
             _tell(ctx, payload, clicker, channel, thread_ts, "Not sent — " + "; ".join(errors))

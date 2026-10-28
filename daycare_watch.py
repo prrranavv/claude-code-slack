@@ -634,6 +634,28 @@ def gmail_items(customer: str, since_epoch: float, cli=gmail_cli) -> list[dict] 
     return [i for i in items if i["at"]]
 
 
+def quote_pdf_parts(message_id: str, thread_id: str, cli=gmail_cli) -> tuple[str, list[dict]]:
+    """(gmail message id, its PDF attachments). No message id → the latest inbound message in the thread with PDFs."""
+    def pdfs(atts):
+        return [a for a in atts or [] if a.get("attachmentId") and (a.get("mimeType") == "application/pdf"
+                or str(a.get("filename", "")).lower().endswith(".pdf")) and (a.get("size") or 0) < 20_000_000][:4]
+    if message_id:
+        got = pdfs(cli("attachments", message_id).get("data"))
+        if got:
+            return message_id, got
+    if not thread_id:
+        return "", []
+    data = cli("thread", thread_id).get("data") or {}
+    msgs = data.get("messages") if isinstance(data, dict) else data
+    for m in reversed(msgs or []):
+        if SOMA_DOMAIN in (m.get("from") or "").lower():
+            continue
+        got = pdfs(m.get("attachments"))
+        if got:
+            return m["id"], got
+    return "", []
+
+
 def merge_evidence(lead_items: list[dict], mail: list[dict]) -> list[dict]:
     """Lead-linked emails win; a Gmail message already linked to the lead is dropped."""
     linked = {i.get("message_id") for i in lead_items if i.get("message_id")}
@@ -1017,6 +1039,7 @@ class Watcher:
         rec = {"kind": ev.get("kind"), "material": bool(ev.get("material")) and ev.get("kind") != "acknowledgement",
                "summary": (ev.get("summary") or "")[:200], "at": item["at"], "party": who, "desk": desk, "org": org,
                "type": item["type"], "from": item.get("from", ""), "thread_id": item.get("thread_id", ""),
+               "message_id": item.get("message_id", ""),
                "subject": item.get("subject", ""), "reply_channel": ev.get("reply_channel") or "none",
                "reply_body": (ev.get("reply_body") or "").strip()}
         if ev.get("kind") == "quote":
@@ -1052,6 +1075,55 @@ class Watcher:
             return
         with state(self.state_path) as s:
             s["cards"][cid] = card
+        if kind == "quote":
+            threading.Thread(target=self.attach_quote_pdfs, args=(cid, record.get("message_id", "")), daemon=True).start()
+
+    def attach_quote_pdfs(self, cid: str, message_id: str = "") -> None:
+        """The wholesaler's quote PDFs, from team@, under the quote card; the card links them."""
+        import shutil
+        import daycare_desk as desk
+        card = read_state(self.state_path)["cards"].get(cid) or {}
+        if not card or card.get("files") or card.get("test"):
+            return
+        try:
+            mid, atts = quote_pdf_parts(message_id, card.get("gmail_thread_id", ""))
+        except Exception as e:  # noqa: BLE001
+            self.log(f"{cid} quote pdf lookup failed: {e}")
+            return
+        if not atts:
+            return
+        tmp = os.path.join(INSTALL_DIR, "tmp-quote-pdfs", cid)
+        os.makedirs(tmp, exist_ok=True)
+        try:
+            uploads = []
+            for i, a in enumerate(atts):
+                safe = f"{i}.pdf"
+                subprocess.run(["bun", os.path.join(WORK_ROOT, ".agents/skills/gmail/scripts/gmail.ts"), "download", mid,
+                                a["attachmentId"], safe, "--as", "team@somainsure.com"], capture_output=True, text=True,
+                               timeout=120, env={**RUN_ENV, "GMAIL_DOWNLOAD_DIR": tmp}, cwd="/tmp")
+                path = os.path.join(tmp, safe)
+                if os.path.exists(path) and os.path.getsize(path) > 0:
+                    uploads.append({"file": path, "filename": a["filename"], "title": a["filename"]})
+            if not uploads:
+                return
+            res = self.ctx.web.files_upload_v2(channel=card["channel"], thread_ts=card["thread_ts"], file_uploads=uploads)
+            files = [{"id": f.get("id"), "name": f.get("title") or f.get("name"), "permalink": f.get("permalink")}
+                     for f in res.get("files") or []]
+        except Exception as e:  # noqa: BLE001
+            self.log(f"{cid} quote pdf upload failed: {e}")
+            return
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        with state(self.state_path) as s:
+            cur = s["cards"].get(cid) or {}
+            cur["files"] = files
+            s["cards"][cid] = card = cur
+        try:
+            self.ctx.web.chat_update(channel=card["channel"], ts=card["ts"], text=desk.card_text(card),
+                                     blocks=desk.card_blocks(card))
+        except Exception as e:  # noqa: BLE001
+            self.log(f"{cid} quote card relink failed: {e}")
+        self.log(f"{cid} quote pdfs attached: {len(files)}")
 
     def _update_header(self, key: str) -> None:
         import daycare_desk as desk

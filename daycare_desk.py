@@ -378,6 +378,18 @@ def make_card(cid: str, kind: str, channel: str, thread_ts: str, record: dict, i
 TEST_EMAIL_ = watch.TEST_EMAIL
 
 
+def _clean_name(name: str) -> str:
+    return re.sub(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_", "", name or "")
+
+
+def _quote_files(card: dict) -> str:
+    files = card.get("files") or []
+    if files:
+        return "\n".join(f"<{f['permalink']}|{f['name']}>" if f.get("permalink") else f["name"] for f in files)
+    names = [_clean_name(a) for a in (card.get("quote") or {}).get("attachments") or [] if a]
+    return ", ".join(names) or "_in email_"
+
+
 def card_text(card: dict) -> str:
     if card["kind"] == "quote":
         return f"Quote — {card.get('who')}: {card['quote'].get('carrier') or 'see quote'}"
@@ -398,8 +410,28 @@ def _stamp_block(card: dict) -> dict | None:
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
 
 
+def _sent_line(card: dict) -> str:
+    who = f" by <@{card['by']}>" if card.get("by") else ""
+    if card["kind"] == "draft":
+        what = f"{card.get('title', 'Draft')} sent to {card.get('to')}"
+    elif card.get("via") == "sms":
+        what = f"Texted {_phone_label(card.get('to', ''))}"
+    else:
+        what = f"Emailed {card.get('to')}"
+    return f":white_check_mark: {what}{who} · {_when(card.get('done_at', time.time()))}"
+
+
+def _discard_btn(card: dict, value: dict) -> dict:
+    what = "Removes this card and deletes the draft in team@." if card["kind"] == "draft" and card["status"] == "open" \
+        else "Removes this card from the thread."
+    return _btn("dcd_discard", "Discard", value, confirm=_confirm("Discard this?", what, "Discard"))
+
+
 def card_blocks(card: dict) -> list[dict]:
     value = {"k": card["id"]}
+    if card["status"] == "sent" and card["kind"] != "quote":
+        # Handled cards collapse to one line so the thread stays readable.
+        return [{"type": "context", "elements": [{"type": "mrkdwn", "text": _sent_line(card)}]}]
     thread_btn = _btn("dcd_open", "Open thread", url=gmail_thread_link(card["gmail_thread_id"])) \
         if card.get("gmail_thread_id") and not card.get("test") else None
     if card["kind"] == "quote":
@@ -410,7 +442,7 @@ def card_blocks(card: dict) -> list[dict]:
             {"type": "section", "fields": [
                 {"type": "mrkdwn", "text": f"*Premium (all-in)*\n{q.get('premium') or '_see quote_'}"},
                 {"type": "mrkdwn", "text": "*Status (per quote)*\n" + (q.get("admitted") or "_not stated_")},
-                {"type": "mrkdwn", "text": "*Quote*\n" + (", ".join(a for a in q.get("attachments") or [] if a) or "_in email_")}]},
+                {"type": "mrkdwn", "text": "*Quote*\n" + _quote_files(card)}]},
         ]
         if q.get("terms"):
             blocks.append({"type": "section", "text": {"type": "mrkdwn",
@@ -425,6 +457,7 @@ def card_blocks(card: dict) -> list[dict]:
             elements.append(_btn("dcd_gmail_bind", "Open bind draft", url=_skill("slack_ui").draft_link(card["bind_draft"])))
         if thread_btn:
             elements.append(thread_btn)
+        elements.append(_discard_btn(card, value))
         blocks.append({"type": "actions", "elements": elements})
         if (stamp := _stamp_block(card)):
             blocks.append(stamp)
@@ -441,7 +474,7 @@ def card_blocks(card: dict) -> list[dict]:
                 _btn("dcd_send", "Send email", value, style="primary",
                      confirm=_confirm("Send this email?", f"Sends this draft to {card.get('to')} from team@ now.", "Send")),
                 _btn("dcd_gmail_draft", "Open draft", url=_skill("slack_ui").draft_link(card.get("message_id", ""))),
-                _btn("dcd_dismiss", "Dismiss", value)]})
+                _discard_btn(card, value)]})
         if card.get("notes"):
             blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": "*Internal only*\n" + "\n".join(
                 f"• {n}" for n in card["notes"])[:2900]}]})
@@ -465,7 +498,7 @@ def card_blocks(card: dict) -> list[dict]:
                                  confirm=_confirm("Send this reply?", f"{what} now.", "Send")))
         if via != "none":
             elements.append(_btn("dcd_edit", "Edit", value))
-        elements.append(_btn("dcd_dismiss", "Dismiss", value))
+        elements.append(_discard_btn(card, value))
         if thread_btn:
             elements.append(thread_btn)
         blocks.append({"type": "actions", "elements": elements})
@@ -542,11 +575,23 @@ def handle_block_action(ctx, payload: dict) -> bool:
         return True
     if aid == "dcd_edit":
         _open_edit(ctx, payload, card)
-    elif aid == "dcd_dismiss":
-        if card["status"] == "open":
-            card.update(status="dismissed", by=clicker, done_at=time.time())
-            _save_card(card)
-            _render(ctx, card)
+    elif aid in ("dcd_discard", "dcd_dismiss"):
+        if card["status"] == "sent" and card["kind"] != "quote":
+            _respond(payload, "Already sent — nothing to discard.")
+            return True
+        if card["kind"] == "draft" and card["status"] == "open" and card.get("draft_id"):
+            _skill("slack_ui").gmail("delete-draft", card["draft_id"])
+        card.update(status="discarded", by=clicker, done_at=time.time())
+        _save_card(card)
+        try:
+            ctx.web.chat_delete(channel=card["channel"], ts=card["ts"])
+        except Exception as e:  # noqa: BLE001
+            ctx.log.info(f"DAYCARE CARD discard delete failed {cid}: {e}")
+        for f in card.get("files") or []:
+            try:
+                ctx.web.files_delete(file=f["id"])
+            except Exception:  # noqa: BLE001
+                pass
     elif aid == "dcd_send":
         if card["status"] != "open" or not _claim(f"send:{cid}"):
             _respond(payload, "Those buttons are spent — this was already handled.")
@@ -578,12 +623,6 @@ def _send(ctx, payload: dict, cid: str, clicker: str) -> None:
             card.update(status="sent", by=clicker, done_at=time.time(), note="", sent_ref=res.get("ref", ""))
             _save_card(card)
             _render(ctx, card)
-            target = _phone_label(card["to"]) if card.get("via") == "sms" else card.get("to")
-            try:
-                ctx.web.chat_postMessage(channel=card["channel"], thread_ts=card["thread_ts"],
-                                         text=f"{'Texted' if card.get('via') == 'sms' else 'Emailed'} {target}. Approved by <@{clicker}>.")
-            except Exception:
-                pass
         else:
             card["note"] = ""
             _save_card(card)

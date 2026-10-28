@@ -378,8 +378,68 @@ def test_dismiss_and_routing_ignores_other_ids():
     assert desk.handle_block_action(ctx, _payload("dcs_send:jake", {})) is False
     desk.handle_block_action(ctx, _payload("dcd_dismiss", {"k": "k2"}))
     c = watch.read_state()["cards"]["k2"]
-    assert c["status"] == "dismissed" and c["by"] == "UPRANAV"
-    assert "Dismissed" in json.dumps(ctx.web.named("chat_update")[-1]["blocks"])
+    assert c["status"] == "discarded" and c["by"] == "UPRANAV"
+    assert ctx.web.named("chat_delete")[-1] == {"channel": "CTEST", "ts": "201.0"}
+
+
+def test_discard_draft_deletes_gmail_draft_and_card(monkeypatch):
+    ctx = Ctx()
+    calls = []
+
+    class UI:
+        def gmail(self, *a):
+            calls.append(a)
+            return {"ok": True}
+    monkeypatch.setattr(desk, "_skill", lambda name: UI())
+    _store({"id": "k3", "kind": "draft", "status": "open", "channel": "CTEST", "thread_ts": "1.0", "ts": "202.0",
+            "title": "Customer quote", "draft_id": "r-1", "to": "a@b.com"})
+    desk.handle_block_action(ctx, _payload("dcd_discard", {"k": "k3"}))
+    assert calls == [("delete-draft", "r-1")]
+    assert ctx.web.named("chat_delete")[-1]["ts"] == "202.0"
+    assert watch.read_state()["cards"]["k3"]["status"] == "discarded"
+
+
+def test_sent_card_collapses_to_one_line():
+    card = {"id": "k4", "kind": "suggest", "status": "sent", "via": "email_reply", "to": "lr@hedgespecialty.com",
+            "by": "UPRANAV", "done_at": 1793189071, "who": "Luke (Hedge)", "summary": "s", "body": "hi"}
+    blocks = desk.card_blocks(card)
+    assert len(blocks) == 1 and blocks[0]["type"] == "context"
+    assert "Emailed lr@hedgespecialty.com by <@UPRANAV>" in blocks[0]["elements"][0]["text"]
+    sms = desk.card_blocks({**card, "via": "sms", "to": "+19032895495"})
+    assert "Texted (903) 289-5495" in sms[0]["elements"][0]["text"]
+    draft = desk.card_blocks({**card, "kind": "draft", "title": "Customer quote", "to": "x@y.com"})
+    assert "Customer quote sent to x@y.com" in draft[0]["elements"][0]["text"]
+
+
+def test_open_cards_carry_discard():
+    base = {"id": "k5", "status": "open", "channel": "C", "thread_ts": "1", "who": "Jake (RT)", "summary": "s"}
+    for card in ({**base, "kind": "suggest", "via": "none"},
+                 {**base, "kind": "draft", "to": "a@b.com", "message_id": "m"},
+                 {**base, "kind": "quote", "quote": {"carrier": "X"}}):
+        ids = [e.get("action_id") for b in desk.card_blocks(card) if b["type"] == "actions" for e in b["elements"]]
+        assert "dcd_discard" in ids and "dcd_dismiss" not in ids
+
+
+def test_quote_card_links_uploaded_pdfs_and_cleans_names():
+    card = {"id": "k6", "kind": "quote", "status": "open", "channel": "C", "thread_ts": "1", "who": "Luke (Hedge)",
+            "quote": {"attachments": ["c8cfb723-1d8d-4402-9e42-e7a4de982955_Quote.pdf"]}}
+    assert "Quote.pdf" in json.dumps(desk.card_blocks(card)) and "c8cfb723" not in json.dumps(desk.card_blocks(card))
+    card["files"] = [{"id": "F1", "name": "Quote.pdf", "permalink": "https://x/F1"}]
+    assert "<https://x/F1|Quote.pdf>" in json.dumps(desk.card_blocks(card))
+
+
+def test_quote_pdf_parts_falls_back_to_latest_inbound_thread_message():
+    def cli(cmd, arg):
+        if cmd == "attachments":
+            return {"data": []}
+        return {"data": {"messages": [
+            {"id": "m1", "from": "Luke <lr@hedgespecialty.com>", "attachments": [{"filename": "old.pdf", "attachmentId": "a0", "size": 9}]},
+            {"id": "m2", "from": "Luke <lr@hedgespecialty.com>", "attachments": [
+                {"filename": "q.pdf", "mimeType": "application/pdf", "attachmentId": "a1", "size": 10},
+                {"filename": "pic.png", "mimeType": "image/png", "attachmentId": "a2", "size": 10}]},
+            {"id": "m3", "from": "Soma <team@somainsure.com>", "attachments": [{"filename": "acord.pdf", "attachmentId": "a3", "size": 9}]}]}}
+    mid, atts = watch.quote_pdf_parts("bad", "t1", cli=cli)
+    assert mid == "m2" and [a["filename"] for a in atts] == ["q.pdf"]
 
 
 def test_send_double_click_is_claimed_once(monkeypatch):
